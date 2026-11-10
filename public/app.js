@@ -227,6 +227,18 @@ function renderKpis(animate) {
 }
 
 // ---------- my flights
+// Why a watched flight has no card: it already left (hidden 2h after departure) or it does not fly today/tomorrow.
+function missingText(w) {
+  const past = state.board.flights.filter((f) => f.q.split(" ").includes(w)).sort((a, b) => (b.d + b.t).localeCompare(a.d + a.t))[0];
+  const days = state.board.meta.days;
+  if (past) {
+    const other = days.filter((d) => d !== past.d).map(dayLabel).join("·");
+    const how = past.cx ? "결항됐어요" : `출발했어요${past.dly && past.dl > 0 ? ` (${past.dl}분 지연)` : ""}`;
+    const real = past.id !== w ? ` · 실제 운항편 ${esc(past.id)}` : "";
+    return `${esc(dayLabel(past.d))} ${past.t} ${esc(past.dn)}행은 이미 ${how}${real}. ${esc(other)}에는 운항 예정이 없어요.`;
+  }
+  return `${days.map(dayLabel).join("·")} 인천 출발편에 이 편명이 없어요. 운항하지 않는 요일이거나 편명이 다를 수 있어요.`;
+}
 function renderMine() {
   const box = $("mineList"), list = watchedFlights();
   if (!state.watch.length) {
@@ -236,20 +248,20 @@ function renderMine() {
   const missing = state.watch.filter((w) => !list.some((f) => f.q.split(" ").includes(w)));
   box.innerHTML = list.map((f) => {
     const r = recommend(f), k = fKey(f);
-    const when = r ? `${r.time}${r.prevDay ? " (전날)" : ""}` : "-";
+    const when = r ? r.time : "-", whenSub = r && r.prevDay ? "전날 밤" : "";
     const where = r && r.hall ? `${r.group} ${r.hall}번` : r ? r.group : "-";
     const w = wx(f.dc);
     return `<article class="mf${state.flash === k ? " flash" : ""}" data-key="${esc(k)}" tabindex="0">
       <div class="mf-top"><div><div class="mf-id">${esc(f.id)}</div><div class="mf-route">${esc(dayLabel(f.d))} ${f.t} · ${esc(f.dn)} ${esc(f.dc)}</div></div>${pill(f)}</div>
       <div class="mf-grid">
-        <div><span>권장 도착</span><b>${esc(when)}</b></div>
+        <div><span>권장 도착</span><b>${esc(when)}</b>${whenSub ? `<small>${whenSub}</small>` : ""}</div>
         <div><span>출국장</span><b>${esc(where)}</b></div>
         <div><span>${f.e && f.e !== f.t && !f.cx ? "변경 출발" : "체크인"}</span><b>${f.e && f.e !== f.t && !f.cx ? esc(estLabel(f)) : esc(f.ci || "-")}</b></div>
       </div>
-      <div class="mf-route">${esc(TERM_LABEL[f.tm] || f.tm)}${f.g ? " · 탑승구 " + esc(f.g) : ""} · ${w && w[1] != null ? `${esc(f.dn)} ${Math.round(w[1])}°` : "날씨 관측값 없음"}</div>
+      <div class="mf-route">${esc(TERM_LABEL[f.tm] || f.tm)}${f.g ? " · 탑승구 " + esc(f.g) : ""} · ${w && w[1] != null ? `${esc(f.dn)} ${Math.round(w[1])}°` : `${esc(f.dn)} 날씨 자료 없음`}</div>
       <button class="icon-btn mf-x" type="button" data-unwatch="${esc(f.q.split(" ").find((x) => state.watch.includes(x)))}" aria-label="${esc(f.id)} 내 출장 편에서 빼기"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
     </article>`;
-  }).join("") + missing.map((w) => `<div class="empty-mine"><b>${esc(w)}</b><span>오늘·내일 인천 출발편에서 찾지 못했어요. 편명을 확인해 주세요.</span><button class="btn ghost" type="button" data-unwatch="${esc(w)}">목록에서 빼기</button></div>`).join("");
+  }).join("") + missing.map((w) => `<div class="empty-mine"><b>${esc(w)}</b><span>${missingText(w)}</span><button class="btn ghost" type="button" data-unwatch="${esc(w)}">목록에서 빼기</button></div>`).join("");
   state.flash = null;
 }
 
