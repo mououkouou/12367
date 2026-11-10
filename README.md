@@ -28,7 +28,7 @@
 | 여객기 운항 현황 상세 (지난 3일) | `/api/trends` | 6시간 |
 | 여객기 운항 현황 상세 (달력에서 고른 날) | `/api/day?date=YYYY-MM-DD` | 오늘 기준 3일 전 ~ 6일 뒤만. 지난 날 6시간, 오늘 이후 5분 |
 | AI 분석 (OpenAI Responses API) | `POST /api/analyze` | 같은 화면 10분 캐시. 화면 집계값만 보내고, 답의 숫자가 보낸 값에 없으면 다시 요청하거나 보여주지 않음. `OPENAI_API_KEY`·`OPENAI_MODEL`(기본 gpt-6-luna) 필요 |
-| 이용 기록 (Airtable UsageLogs) | `POST /api/log` | 캐시 없음. 시간대 선택 · 터미널/항공사 필터 · AI 분석(성공 여부·응답 시간)만 10건 또는 15초마다 묶어 보내고, 페이지를 떠날 때 sendBeacon. IP·이름·연락처는 기록하지 않음. `AIRTABLE_TOKEN` · `BASE_ID` · `TABLE` 필요(없으면 기록만 건너뜀) |
+| 이용 기록 (Airtable UsageLogs) | `POST /api/log` | 캐시 없음. 시간대 선택 · 터미널/항공사 필터 · AI 분석(성공 여부·응답 시간)만 10건 또는 15초마다 묶어 보내고, 페이지를 떠날 때 sendBeacon. IP·이름·연락처는 기록하지 않음. `AIRTABLE_TOKEN` · `AIRTABLE_BASE_ID` · `AIRTABLE_TABLE` 필요(없으면 기록만 건너뜀) |
 
 - 인증키는 **서버 환경 변수 `DATA_GO_KR_KEY`에서만** 읽습니다. 브라우저 코드와 API 응답에는 키가 들어가지 않습니다.
 - AI 분석 키는 **서버 환경 변수 `OPENAI_API_KEY`**, 모델은 `OPENAI_MODEL`(기본 `gpt-6-luna`)에서 읽습니다. 키가 없으면 AI 패널에 "설정되지 않음" 안내가 뜨고 나머지 화면은 그대로 동작합니다.
