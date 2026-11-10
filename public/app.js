@@ -37,6 +37,37 @@ const stamp = (iso) => (iso ? `${iso.slice(5, 10).replace("-", ".")} ${iso.slice
 const fKey = (f) => `${f.id}|${f.d}|${f.t}`;
 const depMs = (f) => (f.e && !f.cx ? ts(f.ed || f.d, f.e) : ts(f.d, f.t));
 
+// ---------- usage log → /api/log → Airtable UsageLogs
+// Only these actions: hour/hall selection, terminal filter, airline filters, AI analysis. Never hover or scroll.
+// Anonymous: a random session id made in this browser; no name, contact or IP. Failures are ignored on purpose.
+const usage = (() => {
+  let sid;
+  const rnd = () => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, "0")).join(""));
+  try { sid = sessionStorage.getItem("icn.sid") || rnd(); sessionStorage.setItem("icn.sid", sid); } catch (e) { sid = sid || rnd(); }
+  const q = []; let timer = null;
+  const device = () => (innerWidth < 768 ? "mobile" : innerWidth < 1080 ? "tablet" : "desktop");
+  function flush(beacon) {
+    clearTimeout(timer); timer = null;
+    while (q.length) {
+      const body = JSON.stringify({ sessionId: sid, events: q.splice(0, 10) });
+      try {
+        if (beacon && navigator.sendBeacon) navigator.sendBeacon("/api/log", new Blob([body], { type: "application/json" }));
+        else fetch("/api/log", { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+      } catch (e) { /* logging must never break the board */ }
+    }
+  }
+  function track(type, data) {
+    try {
+      q.push({ type, at: new Date().toISOString(), viewDate: day(), dataMode: state.board?.meta.sources.flights?.status, device: device(), ...data });
+      if (q.length >= 10) flush(false); else if (!timer) timer = setTimeout(() => flush(false), 15000);
+    } catch (e) { /* ignore */ }
+  }
+  addEventListener("pagehide", () => flush(true));
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") flush(true); });
+  return { track, flush, pending: () => q.length };
+})();
+const TERM_LOG = { "": "All", P01: "T1", P02: "Concourse", P03: "T2" };
+
 // ---------- data
 async function getJson(url) {
   const r = await fetch(url, { headers: { Accept: "application/json" } });
@@ -195,6 +226,9 @@ const ICON = {
   plain: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/></svg>',
   all: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>',
   check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  temp: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 14.8V5a2 2 0 0 0-4 0v9.8a4 4 0 1 0 4 0z"/></svg>',
+  drop: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5s6 6.4 6 10.5a6 6 0 0 1-12 0c0-4.1 6-10.5 6-10.5z"/></svg>',
+  wind: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 8h11a3 3 0 1 0-3-3M3 12h16a3 3 0 1 1-3 3M3 16h8"/></svg>',
   bulb: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg>',
 };
 function pillKind(f) { return f.cx ? "cx" : f.sg === "delayed" ? "late" : f.sg === "departed" ? (f.dly ? "late" : "ok") : f.sg === "boarding" ? "board" : "plain"; }
@@ -281,7 +315,7 @@ function renderKpis(animate) {
       <span class="s">${esc(dayLabel(d))} · 공동운항은 1편으로 합침 · 목적지 ${fmt(dests)}곳</span>
       <div class="spark"><div class="spark-bars" role="img" aria-label="시간대별 출발 예정 편수. 가장 많은 시간 ${hh(busiest)}시 ${perHour[busiest]}편">${perHour.map((n, h) => `<i class="${h === nowH ? "now" : ""}" style="height:${Math.max(2, Math.round((n / maxH) * 100))}%" data-tip="${hh(h)}시 출발 예정 <b>${n}편</b>"></i>`).join("")}</div>
         <div class="spark-ax" aria-hidden="true"><span>00시</span><span>06시</span><span>12시</span><span>18시</span><span>23시</span></div>
-        <span class="s">시간대별 출발 예정 편수${nowH >= 0 ? " · 민트색 막대가 지금 시각" : ""}</span></div></article>
+        <span class="s">시간대별 출발 예정 편수${nowH >= 0 ? " · 진한 보라 막대가 지금 시각" : ""}</span></div></article>
     <article class="kpi k-issue"><span class="lab">지연 · 결항 <span class="src-tag off">공항 자료</span></span>
       <div class="issue-row"><div><span class="st late">${ICON.late}지연</span><span class="val"><span data-n="${delayed}">0</span><small>편</small></span></div>
         <div><span class="st cx">${ICON.cx}결항</span><span class="val"><span data-n="${cancelled}">0</span><small>편</small></span></div></div>
@@ -398,7 +432,7 @@ function renderStrip(animate) {
   strip.append(Object.assign(document.createElement("div"), { className: "rl", textContent: "시간" }));
   for (let h = 0; h < 24; h++) {
     const b = document.createElement("button"); b.type = "button"; b.className = "hr"; b.textContent = hh(h); b.dataset.h = h;
-    b.setAttribute("aria-label", `${hh(h)}시 전체 출국장 선택`); b.onclick = () => select({ col: true, h }); strip.append(b);
+    b.setAttribute("aria-label", `${hh(h)}시 전체 출국장 선택`); b.onclick = () => { select({ col: true, h }); usage.track("congestion_select", { hour: h, scope: "column", terminal: "All" }); }; strip.append(b);
   }
   const fills = [];
   const maxTot = Math.max(1, ...["T1", "T2"].flatMap((k) => (c[k] ? c[k].tot : [0])));
@@ -432,7 +466,7 @@ function renderStrip(animate) {
         b.setAttribute("aria-label", `${term} ${hall}번 출국장 ${hh(h)}시 ${fmt(v)}명 ${LV_TEXT[lv]}`);
         b.onpointerenter = (e) => showTip(e, `${term} ${hall}번 출국장 · ${hh(h)}~${hh((h + 1) % 24)}시<br><b>${fmt(v)}명</b> 예상 · ${LV_TEXT[lv]}`);
         b.onpointermove = moveTip; b.onpointerleave = hideTip;
-        b.onclick = () => select({ term, hall, h });
+        b.onclick = () => { select({ term, hall, h }); usage.track("congestion_select", { hour: h, scope: "cell", terminal: term, hall }); };
         strip.append(b);
         if (animate && !REDUCED) fills.push([h, () => b.classList.add(lv)]);
       }
@@ -590,17 +624,20 @@ async function runAi() {
   const payload = aiPayload(); if (!payload) return;
   const seq = ++a.seq; a.key = aiKeyOf(payload); a.loading = true; a.error = null; a.result = null; renderAi();
   const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 20000);
+  const t0 = performance.now(), sel = state.sel; let logOk = false, logCode = "", logCache = "";
   try {
     const r = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: ctrl.signal });
     const body = await r.json().catch(() => ({}));
     if (seq !== a.seq) return; // selection changed while waiting: drop the old answer
+    logCode = body.code || (r.ok ? "" : `HTTP_${r.status}`); logCache = body.meta?.cache || "";
     if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
-    a.result = body;
+    a.result = body; logOk = true;
   } catch (e) {
     if (seq !== a.seq) return;
     a.error = e.name === "AbortError" ? "20초 안에 답이 오지 않아 중단했어요. 잠시 후 다시 눌러 주세요." : navigator.onLine === false ? "인터넷 연결을 확인해 주세요." : e.message;
   } finally {
     clearTimeout(timer);
+    usage.track("ai_analyze", { ok: logOk, ms: Math.round(performance.now() - t0), code: logOk ? "" : (logCode || "TIMEOUT_OR_NETWORK"), cache: logCache, hour: sel?.h, terminal: sel ? (sel.col ? "All" : sel.term) : undefined });
     if (seq === a.seq) { a.loading = false; renderAi(); }
   }
 }
@@ -724,7 +761,7 @@ function renderFilters() {
   const seg = $("termSeg"); seg.textContent = "";
   for (const [v, lab] of [["", "전체"], ["P01", "T1"], ["P02", "탑승동"], ["P03", "T2"]]) {
     const b = document.createElement("button"); b.type = "button"; b.textContent = lab; b.setAttribute("aria-pressed", String(state.term === v));
-    b.onclick = () => { state.term = v; state.limit = 60; renderFilters(); renderFlights(); renderWeather(); }; seg.append(b);
+    b.onclick = () => { if (state.term !== v) usage.track("filter_change", { filter: "terminal", terminal: TERM_LOG[v] }); state.term = v; state.limit = 60; renderFilters(); renderFlights(); renderWeather(); }; seg.append(b);
   }
   const counts = {}; state.board.flights.forEach((f) => { if (f.d === day()) counts[f.al] = (counts[f.al] || 0) + 1; });
   $("fAirline").innerHTML = `<option value="">항공사 전체</option>` + Object.keys(counts).sort((a, b) => a.localeCompare(b, "ko")).map((a) => `<option value="${esc(a)}">${esc(a)} (${counts[a]})</option>`).join("");
@@ -771,12 +808,12 @@ function renderTrends() {
   box.innerHTML = `<div class="panel tr-chart">
       <div class="tr-chart-h"><div class="tr-nums">
         <div><span>${esc(scope)} 출발편</span><b>${fmt(sum.total)}<small>편</small></b></div>
-        <div><span>지연</span><b style="color:var(--late)">${fmt(sum.delayed)}<small>편</small></b></div>
-        <div><span>결항</span><b style="color:var(--cx)">${fmt(sum.cancelled)}<small>편</small></b></div>
+        <div><span>지연</span><b class="is-late">${fmt(sum.delayed)}<small>편</small></b></div>
+        <div><span>결항</span><b class="is-cx">${fmt(sum.cancelled)}<small>편</small></b></div>
         <div><span>지연·결항 비율 <span class="calc">자체 계산</span></span><b>${rate}<small>%</small></b></div></div>${daySeg}</div>
       <div><div class="hbars" role="group" aria-label="${esc(scope)} 출발 시간대별 편수와 지연·결항">${bars}</div>
         <div class="hax" aria-hidden="true">${hours.map((_, h) => `<span>${hh(h)}</span>`).join("")}</div></div>
-      <div class="chart-legend"><span><i style="background:var(--surface-3)"></i>출발 예정 편수</span><span><i style="background:var(--late)"></i>지연</span><span><i style="background:var(--cx)"></i>결항</span><span><i style="background:transparent;box-shadow:0 0 0 2px var(--ink)"></i>지연·결항 최다 시간대 (5편 이상)</span></div>
+      <div class="chart-legend"><span><i class="k-tot"></i>출발 예정 편수</span><span><i class="k-late"></i>지연</span><span><i class="k-cx"></i>결항</span><span><i class="k-top"></i>지연·결항 최다 시간대 (5편 이상)</span></div>
       <p class="insight">${ICON.bulb}<span>${insight}</span></p>
       <p class="fine">자료 ${esc(stamp(t.at))} · 6시간마다 새로 받아요 · 지연 = 15분 이상 늦거나 '지연' 표시</p>
     </div>
@@ -802,8 +839,8 @@ function renderWeather() {
     const foot = `<div class="dt"><span>${esc(dayLabel(day()))} 출발 ${e.n}편</span><span>관측 자료 ${at ? esc(stamp(at).slice(6)) : "-"}</span></div>`;
     if (!w || w[1] == null) return `<div class="wxcard na"><div class="nm"><span>${esc(e.name)}</span><span class="code">${esc(code)}</span></div><div class="tp">관측값 없음</div><p class="fine">공항 자료에 이 목적지 값이 비어 있어요.</p>${foot}</div>`;
     return `<div class="wxcard"><div class="nm"><span>${esc(w[0] || e.name)}</span><span class="code">${esc(code)}</span></div>
-      <div class="tp">${Math.round(w[1])}°<small>현재 관측</small></div>
-      <dl><dt>체감</dt><dd>${w[2] == null ? "-" : Math.round(w[2]) + "°"}</dd><dt>습도</dt><dd>${w[3] ?? "-"}%</dd><dt>바람</dt><dd>${w[4] ?? "-"}m/s</dd></dl>${foot}</div>`;
+      <div class="tp">${ICON.temp}${Math.round(w[1])}°<small>현재 관측</small></div>
+      <div class="meas"><span title="체감 온도">${ICON.temp}체감 ${w[2] == null ? "-" : Math.round(w[2]) + "°"}</span><span title="습도">${ICON.drop}${w[3] ?? "-"}%</span><span title="바람">${ICON.wind}${w[4] ?? "-"}m/s</span></div>${foot}</div>`;
   }).join("") || `<p class="empty">조건에 맞는 목적지가 없어요. 운항 현황 필터를 바꿔 보세요.</p>`;
   const left = list.length - state.wxLimit;
   $("wxMoreBox").hidden = left <= 0; if (left > 0) $("wxMore").textContent = `목적지 ${left}곳 더 보기`;
@@ -910,8 +947,8 @@ $("calBtn").onclick = () => { const c = $("calInput"); try { c.showPicker(); } c
 $("calInput").onchange = (e) => pickDate(e.target.value);
 $("thMid").oninput = () => onTh("mid"); $("thHigh").oninput = () => onTh("high");
 $("thReset").onclick = () => { state.th = null; store.set("icn.th", null); renderSetter(); renderStrip(false); renderFlights(); renderMine(); };
-$("cardAirline").onchange = (e) => { state.cardAirline = e.target.value; renderCard(); drawLink(); };
-$("fAirline").onchange = (e) => { state.airline = e.target.value; state.limit = 60; renderFlights(); renderWeather(); };
+$("cardAirline").onchange = (e) => { state.cardAirline = e.target.value; renderCard(); drawLink(); usage.track("filter_change", { filter: "card_airline", airline: e.target.value || "전체", hour: state.sel?.h, terminal: state.sel ? (state.sel.col ? "All" : state.sel.term) : undefined }); };
+$("fAirline").onchange = (e) => { state.airline = e.target.value; state.limit = 60; renderFlights(); renderWeather(); usage.track("filter_change", { filter: "airline", airline: e.target.value || "전체", terminal: TERM_LOG[state.term] }); };
 $("fStatus").onchange = (e) => { state.status = e.target.value; state.limit = 60; renderFlights(); renderWeather(); };
 $("fSort").onchange = (e) => { state.sort = e.target.value; renderFlights(); };
 $("statusChips").addEventListener("click", (e) => { const b = e.target.closest("[data-status]"); if (!b) return; state.status = b.dataset.status; state.limit = 60; $("fStatus").value = state.status; renderFlights(); renderWeather(); });

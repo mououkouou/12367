@@ -25,6 +25,7 @@ const API = {
   day: require("./api/day"),
   health: require("./api/health"),
   analyze: require("./api/analyze"),
+  log: require("./api/log"),
 };
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -58,5 +59,6 @@ const server = http.createServer(async (req, res) => {
 server.listen(PORT, () => {
   const key = (process.env.DATA_GO_KR_KEY || "").trim() ? "set" : "NOT set (samples will be shown)";
   const ai = (process.env.OPENAI_API_KEY || "").trim() ? "set" : "NOT set (AI 분석 off)";
-  console.log(`ICN check board running at http://localhost:${PORT}  (DATA_GO_KR_KEY: ${key}, OPENAI_API_KEY: ${ai})`);
+  const at = require("./lib/usage").configured() ? "set" : "NOT set (이용 기록 off)";
+  console.log(`ICN check board running at http://localhost:${PORT}  (DATA_GO_KR_KEY: ${key}, OPENAI_API_KEY: ${ai}, AIRTABLE: ${at})`);
 });

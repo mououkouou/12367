@@ -5,8 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>ICN 체크보드 · 출장 전 인천공항 출발 컨시어지</title>
 <meta name="description" content="인천공항 출발편의 지연·결항, 내 출장 편 권장 도착, 시간대별 출국장 혼잡, 최근 3일 지연 경향, 목적지 현재 날씨를 한 화면에서.">
-<meta name="theme-color" content="#0B1930">
+<meta name="theme-color" content="#F6F9FC" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0A1628" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="/icn/airport-mark.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400..700&display=swap">
 <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
 <link rel="preload" as="image" href="/icn/airport-hero.webp" type="image/webp" fetchpriority="high">
@@ -39,12 +43,9 @@
 
 <!-- ============ 2. Hero -->
 <section class="hero" id="overview" aria-labelledby="heroTitle">
-  <picture class="hero-img" aria-hidden="true">
-    <source srcset="/icn/airport-hero.webp" type="image/webp">
-    <img src="/icn/airport-hero.jpg" alt="" width="1536" height="1024" decoding="async" fetchpriority="high">
-  </picture>
   <div class="hero-in">
-    <p class="eyebrow">ICN DEPARTURE CONCIERGE · <span id="heroDate">인천국제공항 출발</span></p>
+  <div class="hero-copy">
+    <p class="eyebrow"><i class="dot" aria-hidden="true"></i>ICN DEPARTURE CONCIERGE · <span id="heroDate">인천국제공항 출발</span></p>
     <h1 id="heroTitle">공항으로 향하기 전,<br>필요한 모든 판단을 한눈에.</h1>
     <p class="hero-lead" id="lead">인천공항 출발편, 내 출장 편 권장 도착, 출국장 혼잡, 목적지 날씨</p>
     <ul class="hero-stats" id="heroStats" aria-label="오늘 운항 상태 (공항 공식 자료)">
@@ -54,14 +55,21 @@
       <label class="sr" for="addInput">편명 입력</label>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 13.5 21 7.2c.8-.3 1.4.6.9 1.2l-2.3 2.7-7 2 2.6 5.3-1.6.8-3.8-5-4.5 1.2z"/></svg>
       <input id="addInput" name="flight" placeholder="편명 입력 (예: KE017, OZ6783)" maxlength="10" autocapitalize="characters" spellcheck="false">
-      <button class="btn mint" type="submit">내 출장 편에 추가</button>
+      <button class="btn primary" type="submit">내 출장 편에 추가</button>
     </form>
     <div class="hero-foot">
       <div class="src" id="sourceBadges" aria-label="자료 상태"></div>
       <a class="hero-link" href="#flights">전체 출발편 보기 <span aria-hidden="true">→</span></a>
     </div>
   </div>
-  <p class="hero-credit">배경은 연출 이미지예요 · 실제 인천공항 사진이 아니에요</p>
+  <figure class="hero-media">
+    <picture>
+      <source srcset="/icn/airport-hero.webp" type="image/webp">
+      <img src="/icn/airport-hero.jpg" alt="" width="1536" height="1024" decoding="async" fetchpriority="high">
+    </picture>
+    <figcaption>연출 이미지예요 · 실제 인천공항 사진이 아니에요</figcaption>
+  </figure>
+  </div>
 </section>
 
 <main class="wrap" id="main" tabindex="-1">
