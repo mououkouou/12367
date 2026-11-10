@@ -1,0 +1,14 @@
+{
+  "name": "icn-travel-board",
+  "version": "1.0.0",
+  "private": true,
+  "description": "출장 전 인천공항 체크보드 — 오늘·내일 출발편, 출국장 혼잡, 목적지 날씨",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "samples": "python scripts/make_samples.py"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

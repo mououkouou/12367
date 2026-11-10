@@ -1,0 +1,8 @@
+data/raw
+data/cache
+output
+scripts
+api-docs
+*.docx
+.env
+.env.*

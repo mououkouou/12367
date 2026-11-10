@@ -1,0 +1,646 @@
+<title>출장 전 인천공항 체크보드</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: header → summary cards → hour view (hall×hour strip on the left, one selected cell linked by an arrow to the detail card on the right) → band setter → departures table → destination weather → footer. See DESIGN.md. */
+:root {
+  --bg: #EEF1F4; --surface: #FFFFFF; --tile: #EEF0F4; --ink: #16202B; --muted: #5B6875; --line: #D5DCE3; --grid: #E3E8EE;
+  --sign: #F2B705; --sign-ink: #16202B; --accent: #1F6FB2;
+  --lv-low: #BFE0E8; --lv-mid: #F6C76B; --lv-high: #E0603A; --lv-rest: #E3E8ED;
+  --late-bg: #FCE3DE; --late: #B3261E; --ok-bg: #ECEEF1; --ok: #4A5562; --cx-bg: #16202B; --cx: #FFFFFF;
+  --board-bg: #E2EEFA; --board: #1F6FB2; --row-late: #FFF5F2; --row-cx: #F1F2F4;
+  --bar: #5B6875;
+  --font-text: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-num: "IBM Plex Mono", Consolas, ui-monospace, monospace;
+  --r: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161C; --surface: #18202A; --tile: #202A36; --ink: #E6EBF0; --muted: #94A2B0; --line: #2A3542; --grid: #161D25;
+    --sign: #F5C21B; --sign-ink: #11161C; --accent: #6CB2F0;
+    --lv-low: #1F4F5C; --lv-mid: #B3832A; --lv-high: #E0693F; --lv-rest: #222C38;
+    --late-bg: #4A221E; --late: #FF9C8F; --ok-bg: #2A3440; --ok: #B8C3CE; --cx-bg: #E6EBF0; --cx: #11161C;
+    --board-bg: #1B3550; --board: #9CCBF7; --row-late: #2A1F1E; --row-cx: #222A33;
+    --bar: #94A2B0;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161C; --surface: #18202A; --tile: #202A36; --ink: #E6EBF0; --muted: #94A2B0; --line: #2A3542; --grid: #161D25;
+  --sign: #F5C21B; --sign-ink: #11161C; --accent: #6CB2F0;
+  --lv-low: #1F4F5C; --lv-mid: #B3832A; --lv-high: #E0693F; --lv-rest: #222C38;
+  --late-bg: #4A221E; --late: #FF9C8F; --ok-bg: #2A3440; --ok: #B8C3CE; --cx-bg: #E6EBF0; --cx: #11161C;
+  --board-bg: #1B3550; --board: #9CCBF7; --row-late: #2A1F1E; --row-cx: #222A33;
+  --bar: #94A2B0;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--ink); font-family: var(--font-text); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1240px; margin: 0 auto; padding-block: 20px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 28px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+h1 { font-size: 24px; font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 18px; font-weight: 600; }
+.num { font-family: var(--font-num); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+.small { font-size: 13px; }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--sign); outline-offset: 2px; }
+
+/* header */
+.top { display: flex; flex-wrap: wrap; gap: 12px 24px; align-items: flex-end; justify-content: space-between; }
+.brand { display: flex; gap: 12px; align-items: center; min-width: 0; }
+.sign { font-family: var(--font-num); font-weight: 600; font-size: 13px; letter-spacing: 0.06em; background: var(--sign); color: var(--sign-ink); padding: 6px 8px; border-radius: 3px; }
+.asof { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.asof b { color: var(--ink); font-weight: 600; }
+.seg { display: inline-flex; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 3px; gap: 2px; flex-wrap: wrap; }
+.seg button { border: 0; background: transparent; padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 13px; white-space: nowrap; }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--bg); font-weight: 600; }
+.seg button:not([aria-pressed="true"]):hover { background: var(--lv-rest); }
+
+/* summary cards */
+.kpis { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 14px 16px; display: grid; gap: 2px; align-content: start; }
+.kpi .lab { font-size: 13px; color: var(--muted); }
+.kpi .val { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 36px; font-weight: 600; line-height: 1.15; }
+.kpi .val small { font-size: 15px; font-weight: 500; margin-left: 2px; font-family: var(--font-text); }
+.kpi .sub { font-size: 13px; color: var(--muted); }
+.kpi.alert .val { color: var(--late); }
+@media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpis .kpi:last-child { grid-column: 1 / -1; } }
+
+.sec { display: grid; gap: 12px; min-width: 0; }
+.sec-head { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; justify-content: space-between; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 13px; color: var(--muted); align-items: center; }
+.sw { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: -2px; margin-right: 5px; }
+.sw.low { background: var(--lv-low); } .sw.mid { background: var(--lv-mid); } .sw.high { background: var(--lv-high); }
+.sw.off, .cell.off { background: repeating-linear-gradient(135deg, var(--line) 0 2px, var(--surface) 2px 6px); }
+
+/* hour view: strip + linked card */
+.hourview { position: relative; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 20px 44px; align-items: start;
+  padding: 18px; border: 1px solid var(--line); border-radius: var(--r);
+  background-color: var(--bg); background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px); background-size: 24px 24px; }
+@media (max-width: 1040px) { .hourview { grid-template-columns: minmax(0, 1fr); } }
+.link { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 2; }
+.strip-col { display: grid; gap: 10px; min-width: 0; align-content: start; }
+.strip-box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 12px 8px; overflow-x: auto; }
+.strip { display: grid; grid-template-columns: 96px repeat(24, minmax(19px, 1fr)); gap: 3px 2px; min-width: 560px; align-items: center; }
+.strip .rl { font-size: 13px; padding-right: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.strip .rl.term { font-weight: 600; }
+.strip .grp { grid-column: 1 / -1; font-size: 12px; color: var(--muted); letter-spacing: 0.04em; margin-top: 6px; border-top: 1px solid var(--line); padding-top: 6px; }
+.hr { border: 0; background: transparent; font-family: var(--font-num); font-size: 11px; color: var(--muted); padding: 2px 0; cursor: pointer; border-radius: 3px; }
+.hr:hover { color: var(--ink); background: var(--lv-rest); }
+.hr[aria-pressed="true"] { background: var(--sign); color: var(--sign-ink); font-weight: 600; }
+.cell.colsel { box-shadow: 0 0 0 2px var(--sign); position: relative; z-index: 1; }
+.cell { height: 22px; border: 0; padding: 0; border-radius: 3px; background: var(--lv-rest); transition: background-color 360ms ease-out; }
+button.cell { cursor: pointer; }
+button.cell:hover { box-shadow: inset 0 0 0 2px var(--ink); }
+.cell.low { background: var(--lv-low); } .cell.mid { background: var(--lv-mid); } .cell.high { background: var(--lv-high); }
+.cell[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); position: relative; z-index: 1; }
+.bars { height: 30px; display: flex; align-items: flex-end; }
+.bars i { display: block; width: 100%; background: var(--bar); opacity: 0.5; border-radius: 2px 2px 0 0; transition: height 420ms ease-out; height: 0; }
+.bars.on i { background: var(--ink); opacity: 0.85; }
+.notes { font-size: 13px; color: var(--muted); display: grid; gap: 2px; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px 14px; display: grid; gap: 14px; min-width: 0; box-shadow: 0 6px 24px rgba(22,32,43,0.08); }
+.card-head { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: baseline; }
+.card-head h3 { font-size: 17px; font-weight: 700; }
+.tiles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.tile { background: var(--tile); border-radius: 8px; padding: 10px 14px; display: grid; gap: 2px; min-width: 0; }
+.tile .lab { font-size: 13px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile .v { font-size: 20px; font-weight: 700; font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tile .v.alert { color: var(--late); }
+.tile .s { font-size: 12px; color: var(--muted); }
+@media (max-width: 460px) { .tiles { grid-template-columns: minmax(0, 1fr); } }
+.mini-box { max-height: 300px; overflow: auto; border-top: 1px solid var(--line); }
+.mini { width: 100%; border-collapse: collapse; font-size: 14px; }
+.mini th { text-align: left; font-size: 13px; font-weight: 500; color: var(--muted); padding: 8px 6px; border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--surface); white-space: nowrap; }
+.mini td { padding: 7px 6px; vertical-align: middle; }
+.mini td.fid { font-family: var(--font-num); font-weight: 600; white-space: nowrap; }
+.mini td.tm { font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--muted); }
+.mini td.dest { font-weight: 600; white-space: nowrap; }
+.mini td.fid .tag { display: block; font-family: var(--font-text); font-weight: 400; font-size: 11px; color: var(--muted); }
+.mini td.wx { color: var(--muted); white-space: nowrap; font-size: 13px; }
+.card-foot { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 13px; color: var(--muted); }
+.card-foot select { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; font-size: 13px; max-width: 100%; }
+
+.pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; white-space: nowrap; }
+.pill.late { background: var(--late-bg); color: var(--late); }
+.pill.ok { background: var(--ok-bg); color: var(--ok); }
+.pill.cx { background: var(--cx-bg); color: var(--cx); }
+.pill.board { background: var(--board-bg); color: var(--board); }
+
+/* band setter */
+.setter { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 16px 24px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px; }
+@media (max-width: 760px) { .setter { grid-template-columns: minmax(0, 1fr); } }
+.setter h3 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.hist { width: 100%; height: 150px; display: block; }
+.hist text { fill: var(--muted); font-family: var(--font-num); font-size: 11px; }
+.ctrl { display: grid; gap: 14px; align-content: start; min-width: 0; }
+.ctrl label { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; }
+.ctrl input[type="range"] { width: 100%; accent-color: var(--ink); }
+.ctrl .count { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+.btn { border: 1px solid var(--line); background: var(--surface); padding: 6px 12px; border-radius: var(--r); cursor: pointer; font-size: 13px; }
+.btn:hover { background: var(--lv-rest); }
+
+/* departures table */
+.filters { display: flex; flex-wrap: wrap; gap: 8px 10px; align-items: center; }
+.filters select, .filters input[type="search"] { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 7px 10px; font-size: 13px; min-width: 0; }
+.filters input[type="search"] { flex: 1 1 220px; }
+.table-box { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); overflow-x: auto; }
+.big { border-collapse: collapse; width: 100%; min-width: 880px; font-size: 14px; }
+.big th { text-align: left; font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0.04em; padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.big td { padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.big tr:last-child td { border-bottom: 0; }
+.big td.t { font-family: var(--font-num); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.big .fid { font-family: var(--font-num); font-weight: 600; white-space: nowrap; }
+.cs { font-family: var(--font-num); font-size: 12px; color: var(--muted); max-width: 180px; }
+.code { font-family: var(--font-num); font-size: 12px; color: var(--muted); margin-left: 4px; }
+.big tr.cx { background: var(--row-cx); } .big tr.cx td:first-child { box-shadow: inset 4px 0 0 var(--cx-bg); }
+.big tr.dl { background: var(--row-late); } .big tr.dl td:first-child { box-shadow: inset 4px 0 0 var(--late); }
+.big tr.gone td { color: var(--muted); }
+.dly { display: block; font-family: var(--font-num); font-size: 12px; margin-top: 3px; }
+.dly.late { color: var(--late); font-weight: 600; } .dly.early { color: var(--muted); }
+.rec { white-space: nowrap; }
+.rec b { font-family: var(--font-num); }
+.lvdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+.lvdot.low { background: var(--lv-low); outline: 1px solid var(--muted); outline-offset: -1px; } .lvdot.mid { background: var(--lv-mid); } .lvdot.high { background: var(--lv-high); }
+.more { display: flex; justify-content: center; padding: 10px; }
+.empty { padding: 24px 12px; text-align: center; color: var(--muted); }
+.rule { font-size: 13px; color: var(--muted); }
+
+/* weather */
+.wx { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; }
+.wxc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: grid; gap: 2px; align-content: start; min-width: 0; }
+.wxc .nm { font-weight: 600; font-size: 14px; display: flex; justify-content: space-between; gap: 6px; }
+.wxc .nm span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wxc .tp { font-family: var(--font-num); font-size: 28px; font-weight: 600; line-height: 1.2; }
+.wxc .dt { font-size: 12px; color: var(--muted); }
+.wxc.na .tp { font-size: 15px; font-family: var(--font-text); font-weight: 500; color: var(--muted); padding-block: 8px; }
+
+footer { border-top: 1px solid var(--line); padding-top: 14px; display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+footer strong { color: var(--ink); font-size: 14px; }
+.tip { position: fixed; z-index: 20; pointer-events: none; background: var(--ink); color: var(--bg); font-size: 13px; padding: 7px 10px; border-radius: var(--r); max-width: 260px; line-height: 1.4; box-shadow: 0 4px 14px rgba(0,0,0,0.18); }
+.tip b { font-family: var(--font-num); }
+@media (prefers-reduced-motion: reduce) { .cell, .bars i { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <span class="sign" aria-hidden="true">ICN ✈</span>
+      <div>
+        <h1>출장 전 인천공항 체크보드</h1>
+        <div class="asof" id="asof"></div>
+      </div>
+    </div>
+    <div class="seg" role="group" aria-label="날짜 선택" id="daySeg"></div>
+  </header>
+
+  <section class="kpis" id="kpis" aria-label="요약"></section>
+
+  <section class="sec" id="congestion">
+    <div class="sec-head">
+      <h2>시간대별 출국장 혼잡</h2>
+      <div class="legend"><span><i class="sw low"></i>여유</span><span><i class="sw mid"></i>보통</span><span><i class="sw high"></i>혼잡</span><span><i class="sw off"></i>미운영·제외</span></div>
+    </div>
+    <div class="hourview" id="hourview">
+      <svg class="link" id="link" aria-hidden="true"></svg>
+      <div class="strip-col">
+        <div class="strip-box" id="stripBox"><div class="strip" id="strip"></div></div>
+        <div class="notes"><span>출국장 칸을 누르면 그 칸 하나만, 위쪽 시간을 누르면 그 시간 세로줄 전체가 선택돼요. 오른쪽에 그 시간 출발편이 나와요.</span><span>칸에 마우스를 올리면 예상 승객 수가 보여요. 색 기준은 아래에서 분포를 보고 정해요.</span></div>
+      </div>
+      <div class="card" id="card" aria-live="polite">
+        <div class="card-head"><h3 id="cardTitle"></h3><span class="small muted">참고용 · 항공사 안내 확인</span></div>
+        <div class="tiles">
+          <div class="tile"><span class="lab">출발편</span><span class="v" id="tFlights"></span><span class="s" id="tFlightsS"></span></div>
+          <div class="tile"><span class="lab">지연 · 결항</span><span class="v" id="tIssue"></span><span class="s">지연 · 결항 편 수</span></div>
+          <div class="tile"><span class="lab" id="tPaxL"></span><span class="v" id="tPax"></span><span class="s" id="tPaxS"></span></div>
+        </div>
+        <div class="mini-box">
+          <table class="mini">
+            <thead><tr><th>편명</th><th>목적지</th><th>예정 → 변경</th><th>상태</th><th>날씨</th></tr></thead>
+            <tbody id="miniBody"></tbody>
+          </table>
+        </div>
+        <div class="card-foot"><span>지연 · 결항 편이 맨 위</span><span aria-hidden="true">·</span>
+          <label for="cardAirline">항공사</label><select id="cardAirline"></select></div>
+      </div>
+    </div>
+
+    <div class="setter" id="setter">
+      <div>
+        <h3>색 구간 정하기 · 먼저 분포 보기</h3>
+        <div class="small muted" id="histCap"></div>
+        <svg class="hist" id="hist" role="img" aria-label="출국장·시간대별 예상 승객 수 분포"></svg>
+      </div>
+      <div class="ctrl">
+        <div><label for="thMid"><span>보통 시작</span><span class="num" id="thMidV"></span></label><input type="range" id="thMid" step="10"></div>
+        <div><label for="thHigh"><span>혼잡 시작</span><span class="num" id="thHighV"></span></label><input type="range" id="thHigh" step="10"></div>
+        <div class="count" id="thCount"></div>
+        <div><button class="btn" id="thReset" type="button">분포 기준으로 되돌리기 (50% · 80% 지점)</button></div>
+        <div class="small muted">참고: 공항 공식 표시는 터미널 전체 시간당 인원 기준(4,300명~ 파랑 · 4,700명~ 노랑 · 5,100명~ 주황 · 5,500명~ 빨강)이라 출국장 하나에는 그대로 쓰지 않았어요.</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="flights">
+    <div class="sec-head"><h2>전체 출발편</h2><span class="small muted" id="flightCount"></span></div>
+    <div class="filters">
+      <div class="seg" role="group" aria-label="터미널" id="termSeg"></div>
+      <select id="fAirline" aria-label="항공사"></select>
+      <select id="fStatus" aria-label="상태">
+        <option value="">상태 전체</option>
+        <option value="issue">지연 · 결항만</option>
+        <option value="before">출발 전</option>
+        <option value="boarding">탑승 관련</option>
+        <option value="departed">출발 완료</option>
+      </select>
+      <input type="search" id="fSearch" placeholder="목적지 · 공항 코드 · 편명 검색" aria-label="목적지 검색">
+      <button class="btn" id="clearAll" type="button" hidden>조건 지우기</button>
+    </div>
+    <div class="table-box">
+      <table class="big">
+        <thead><tr><th>예정</th><th>변경</th><th>편명</th><th>목적지</th><th>터미널 · 카운터</th><th>상태</th><th>권장 도착 · 출국장</th><th>목적지 날씨</th></tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="more" id="moreBox" hidden><button class="btn" id="moreBtn" type="button"></button></div>
+    </div>
+    <div class="rule">권장 도착 = 출발 2시간 30분 전 (탑승동 출발편은 셔틀 이동으로 15분 더), 그 시간 가장 한산한 운영 출국장 기준. 그 출국장도 혼잡이면 30분 더 일찍. 지연은 변경 시각 − 예정 시각이며 15분 이상이면 지연으로 표시해요.</div>
+  </section>
+
+  <section class="sec" id="weather">
+    <div class="sec-head"><h2>목적지 날씨</h2><span class="small muted">현재 관측값(예보 아님) · 위 표의 조건에 맞는 목적지, 편 수가 많은 순</span></div>
+    <div class="wx" id="wx"></div>
+    <div class="more" id="wxMoreBox" hidden><button class="btn" id="wxMore" type="button"></button></div>
+  </section>
+
+  <footer>
+    <strong>참고용 · 공식 운항 정보는 항공사 안내 확인</strong>
+    <span>자료: 인천국제공항공사 공공데이터 (여객기 운항 현황 상세 · 출입국별 승객 예고 · 기상 정보), 공공데이터포털 제공. 시각은 모두 한국 시간.</span>
+    <span id="footAsof"></span>
+  </footer>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+(() => {
+const DATA = /*__BOARD_DATA__*/null;
+const $ = (id) => document.getElementById(id);
+const fmt = (n) => Number(n).toLocaleString("ko-KR");
+const hh = (h) => String(h).padStart(2, "0");
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const REDUCED = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const WEEK = ["일", "월", "화", "수", "목", "금", "토"];
+const DAYS = DATA.meta.days;
+const TERM_LABEL = { P01: "T1", P02: "탑승동", P03: "T2" };
+const termGroup = (tm) => (tm === "P03" ? "T2" : "T1"); // P02 concourse checks in at T1
+const LV_TEXT = { low: "여유", mid: "보통", high: "혼잡", off: "미운영" };
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+const collectedHour = Number(DATA.meta.generated.slice(11, 13));
+
+const state = { day: DAYS[0], sel: null, cardAirline: "", term: "", airline: "", status: "", q: "", limit: 60, wxLimit: 12,
+                th: store.get("icn-board-th") };
+
+// time helpers: KST wall clock carried in UTC fields
+function ts(day, hm) { const [y, m, d] = day.split("-").map(Number); const [h, mi] = hm.split(":").map(Number); return Date.UTC(y, m - 1, d, h, mi); }
+const dayOf = (t) => new Date(t).toISOString().slice(0, 10);
+const hmOf = (t) => new Date(t).toISOString().slice(11, 16);
+function dayLabel(day) { const d = new Date(day + "T00:00:00Z"); return `${d.getUTCMonth() + 1}.${d.getUTCDate()} (${WEEK[d.getUTCDay()]})`; }
+const stamp = (iso) => (iso ? iso.slice(0, 10) + " " + iso.slice(11, 16) : "-");
+
+// ---------- congestion levels (operating hall × hour values)
+function hallValues(day) {
+  const c = DATA.cong[day]; const vals = [];
+  if (c) for (const t of Object.values(c)) for (const s of Object.values(t.halls)) for (const v of s) if (v > 0) vals.push(v);
+  return vals.sort((a, b) => a - b);
+}
+function pct(s, p) { if (!s.length) return 0; const k = (s.length - 1) * p, lo = Math.floor(k), hi = Math.min(lo + 1, s.length - 1); return s[lo] + (s[hi] - s[lo]) * (k - lo); }
+function autoTh(day) { const v = hallValues(day); return { mid: Math.round(pct(v, 0.5) / 10) * 10, high: Math.round(pct(v, 0.8) / 10) * 10 }; }
+const th = (day) => state.th || autoTh(day);
+const level = (v, t) => (!v ? "off" : v >= t.high ? "high" : v >= t.mid ? "mid" : "low");
+
+// ---------- recommendation
+function recommend(f) {
+  if (f.cx || !f.t) return null;
+  const group = termGroup(f.tm);
+  let arrive = ts(f.d, f.t) - (150 + (f.tm === "P02" ? 15 : 0)) * 60000;
+  const aday = dayOf(arrive), hour = new Date(arrive).getUTCHours(), c = DATA.cong[aday];
+  const out = { group, hall: null, lv: null, noData: !c };
+  if (c && c[group]) {
+    let best = null;
+    for (const [hall, s] of Object.entries(c[group].halls)) if (s[hour] > 0 && (!best || s[hour] < best[1])) best = [hall, s[hour]];
+    if (best) { out.hall = best[0]; out.lv = level(best[1], th(aday)); if (out.lv === "high") arrive -= 30 * 60000; }
+  }
+  out.time = hmOf(arrive); out.prevDay = dayOf(arrive) !== f.d;
+  return out;
+}
+
+// ---------- header + day switch
+function renderHeader() {
+  const m = DATA.meta, a = $("asof"); a.textContent = "";
+  const b = document.createElement("b"); b.textContent = "자료 기준 " + stamp(m.generated);
+  a.append(b, document.createTextNode(` · 운항 ${stamp(m.collected.flights).slice(11)} · 혼잡 예고 ${stamp(m.collected.passenger).slice(11)} · 날씨 ${stamp(m.collected.weather).slice(11)} 수집`));
+  $("footAsof").textContent = `자료 기준 ${stamp(m.generated)} 스냅샷이에요. 이후 바뀐 운항 정보는 반영되지 않아요.`;
+  const seg = $("daySeg"); seg.textContent = "";
+  DAYS.forEach((d, i) => {
+    const btn = document.createElement("button"); btn.type = "button";
+    btn.textContent = `${i === 0 ? "오늘" : "내일"} ${dayLabel(d)}`;
+    btn.setAttribute("aria-pressed", String(d === state.day));
+    btn.onclick = () => { if (state.day === d) return; state.day = d; state.sel = null; state.cardAirline = ""; state.airline = ""; state.limit = 60; state.wxLimit = 12; renderAll(true); };
+    seg.append(btn);
+  });
+}
+
+// ---------- summary cards
+function countUp(el, to, animate) {
+  if (!animate || REDUCED) { el.textContent = fmt(to); return; }
+  const start = performance.now(), dur = 900;
+  const step = (now) => { const p = Math.min(1, (now - start) / dur); el.textContent = fmt(Math.round(to * (1 - Math.pow(1 - p, 3)))); if (p < 1) requestAnimationFrame(step); };
+  el.textContent = "0"; requestAnimationFrame(step);
+}
+function peak(day) { const c = DATA.cong[day]; let h = 0, v = 0; if (c) for (let i = 0; i < 24; i++) { const s = (c.T1?.tot[i] || 0) + (c.T2?.tot[i] || 0); if (s > v) { v = s; h = i; } } return [h, v]; }
+function renderKpis(animate) {
+  const fl = DATA.flights.filter((f) => f.d === state.day);
+  const delayed = fl.filter((f) => f.dly && !f.cx).length, cancelled = fl.filter((f) => f.cx).length;
+  const [ph, pv] = peak(state.day), isToday = state.day === DAYS[0];
+  const cards = [
+    { lab: "출발편", v: fl.length, unit: "편", sub: "공동운항은 1편으로 합침" },
+    { lab: "지연", v: delayed, unit: "편", sub: isToday ? "15분 이상 늦거나 '지연' 표시" : "내일 편은 아직 변경 시각 없음", alert: delayed > 0 },
+    { lab: "결항", v: cancelled, unit: "편", sub: cancelled ? "표 맨 위에 표시" : "결항 편 없음", alert: cancelled > 0 },
+    { lab: "가장 붐비는 시간", v: ph, unit: "시", pad: true, sub: `${hh(ph)}~${hh((ph + 1) % 24)}시 · T1+T2 ${fmt(pv)}명 예상` },
+    { lab: "목적지", v: new Set(fl.map((f) => f.dc)).size, unit: "곳", sub: "출발편 기준 도착 공항 수" },
+  ];
+  const box = $("kpis"); box.textContent = "";
+  for (const k of cards) {
+    const d = document.createElement("div"); d.className = "kpi" + (k.alert ? " alert" : "");
+    const lab = Object.assign(document.createElement("div"), { className: "lab", textContent: k.lab });
+    const val = Object.assign(document.createElement("div"), { className: "val" });
+    const n = document.createElement("span"); const u = Object.assign(document.createElement("small"), { textContent: k.unit });
+    val.append(n, u);
+    d.append(lab, val, Object.assign(document.createElement("div"), { className: "sub", textContent: k.sub })); box.append(d);
+    if (k.pad) n.textContent = hh(k.v); else countUp(n, k.v, animate);
+  }
+}
+
+// ---------- tooltip
+const tip = $("tip");
+function showTip(e, html) { tip.innerHTML = html; tip.hidden = false; moveTip(e); }
+function moveTip(e) { const r = tip.getBoundingClientRect(); let x = e.clientX + 14, y = e.clientY + 14; if (x + r.width > innerWidth - 8) x = e.clientX - r.width - 14; if (y + r.height > innerHeight - 8) y = e.clientY - r.height - 14; tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px"; }
+const hideTip = () => { tip.hidden = true; };
+
+// ---------- strip: hall rows; exactly one cell selected at a time
+function defaultSel(day) {
+  const c = DATA.cong[day]; if (!c || !c.T1) return null;
+  const h = day === DAYS[0] ? collectedHour : peak(day)[0];
+  let best = null;
+  for (const [hall, s] of Object.entries(c.T1.halls)) if (!best || s[h] > best[1]) best = [hall, s[h]];
+  return best ? { term: "T1", hall: best[0], h } : null;
+}
+function renderStrip(animate) {
+  const strip = $("strip"); strip.textContent = "";
+  const c = DATA.cong[state.day], t = th(state.day);
+  if (!c) { strip.textContent = "이 날짜의 승객 예고 자료가 없어요."; renderCard(); drawLink(); return; }
+  if (!state.sel) state.sel = defaultSel(state.day);
+  strip.append(Object.assign(document.createElement("div"), { className: "rl muted small", textContent: "시간" }));
+  for (let h = 0; h < 24; h++) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "hr"; b.textContent = hh(h); b.dataset.h = h;
+    b.setAttribute("aria-label", `${hh(h)}시 전체 출국장 선택`); b.onclick = () => selectHour(h); strip.append(b);
+  }
+  const fills = [];
+  const maxTot = Math.max(1, ...["T1", "T2"].flatMap((k) => (c[k] ? c[k].tot : [0])));
+  for (const term of ["T1", "T2"]) {
+    const tc = c[term]; if (!tc) continue;
+    strip.append(Object.assign(document.createElement("div"), { className: "grp", textContent: term === "T1" ? "제1터미널 (탑승동 출발편 포함)" : "제2터미널" }));
+    strip.append(Object.assign(document.createElement("div"), { className: "rl term", textContent: `${term} 전체` }));
+    tc.tot.forEach((v, h) => {
+      const d = document.createElement("div"); d.className = "bars"; d.dataset.term = term; d.dataset.h = h;
+      const i = document.createElement("i"); d.append(i);
+      d.onpointerenter = (e) => showTip(e, `${term} 전체 · ${hh(h)}~${hh((h + 1) % 24)}시<br><b>${fmt(v)}명</b> 예상`);
+      d.onpointermove = moveTip; d.onpointerleave = hideTip;
+      strip.append(d);
+      const set = () => { i.style.height = Math.round((v / maxTot) * 100) + "%"; };
+      if (animate && !REDUCED) fills.push([h, set]); else set();
+    });
+    const halls = [...Object.keys(tc.halls).map((k) => [k, false]), ...tc.off.map((k) => [k, true])].sort((a, b) => a[0] - b[0]);
+    for (const [hall, off] of halls) {
+      const excluded = term === "T1" && hall === "6";
+      const label = `${term} ${hall}번` + (off ? (excluded ? " · 제외" : " · 미운영") : "");
+      strip.append(Object.assign(document.createElement("div"), { className: "rl" + (off ? " muted" : ""), textContent: label, title: label }));
+      for (let h = 0; h < 24; h++) {
+        if (off) {
+          const d = document.createElement("div"); d.className = "cell off";
+          d.onpointerenter = (e) => showTip(e, `${term} ${hall}번 출국장<br>${excluded ? "교통약자 우대 출구라 혼잡도 대상에서 제외" : "이날 예상 인원 0명 · 미운영"}`);
+          d.onpointermove = moveTip; d.onpointerleave = hideTip; strip.append(d); continue;
+        }
+        const v = tc.halls[hall][h], lv = level(v, t);
+        const b = document.createElement("button"); b.type = "button"; b.className = "cell" + (animate && !REDUCED ? "" : " " + lv);
+        Object.assign(b.dataset, { term, hall, h });
+        b.setAttribute("aria-label", `${term} ${hall}번 출국장 ${hh(h)}시 ${fmt(v)}명 ${LV_TEXT[lv]}`);
+        b.setAttribute("aria-pressed", String(isSel(term, hall, h)));
+        b.onpointerenter = (e) => showTip(e, `${term} ${hall}번 출국장 · ${hh(h)}~${hh((h + 1) % 24)}시<br><b>${fmt(v)}명</b> 예상 · ${LV_TEXT[lv]}`);
+        b.onpointermove = moveTip; b.onpointerleave = hideTip;
+        b.onclick = () => select(term, hall, h);
+        strip.append(b);
+        if (animate && !REDUCED) fills.push([h, () => b.classList.add(lv)]);
+      }
+    }
+  }
+  if (fills.length) requestAnimationFrame(() => requestAnimationFrame(() => fills.forEach(([h, f]) => setTimeout(f, 60 + h * 40))));
+  markSel(); renderCard(); drawLink();
+}
+// selection is either one cell {term, hall, h} or a whole hour column {col: true, h}
+const isSel = (term, hall, h) => !!state.sel && !state.sel.col && state.sel.term === term && state.sel.hall === hall && state.sel.h === h;
+function markSel() {
+  const s = state.sel, col = !!(s && s.col);
+  document.querySelectorAll("#strip button.cell").forEach((b) => {
+    b.setAttribute("aria-pressed", String(isSel(b.dataset.term, b.dataset.hall, Number(b.dataset.h))));
+    b.classList.toggle("colsel", col && Number(b.dataset.h) === s.h);
+  });
+  document.querySelectorAll("#strip .hr").forEach((b) => b.setAttribute("aria-pressed", String(col && Number(b.dataset.h) === s.h)));
+  document.querySelectorAll("#strip .bars").forEach((d) => d.classList.toggle("on", !!s && Number(d.dataset.h) === s.h && (col || d.dataset.term === s.term)));
+}
+function select(term, hall, h) { state.sel = { term, hall, h }; state.cardAirline = ""; markSel(); renderCard(); drawLink(); }
+function selectHour(h) { state.sel = { col: true, h }; state.cardAirline = ""; markSel(); renderCard(); drawLink(); }
+
+// ---------- linked detail card
+function statusPill(f) {
+  if (f.cx) return `<span class="pill cx">결항</span>`;
+  if (f.sg === "delayed") return `<span class="pill late">지연</span>`;
+  if (f.sg === "departed") return f.dly ? `<span class="pill late">지연 출발</span>` : `<span class="pill ok">출발</span>`;
+  if (f.sg === "boarding") return `<span class="pill board">${esc(f.st)}</span>`;
+  return `<span class="pill ok">${esc(f.st || "정상")}</span>`;
+}
+const wxShort = (code) => { const w = DATA.wx[code]; return !w || w[1] == null ? "관측값 없음" : `${Math.round(w[1])}° · 습도 ${w[3] ?? "-"}%`; };
+const issueFirst = (a, b) => ((a.cx ? 0 : a.dly ? 1 : 2) - (b.cx ? 0 : b.dly ? 1 : 2)) || a.t.localeCompare(b.t) || a.id.localeCompare(b.id);
+function renderCard() {
+  const card = $("card");
+  if (!state.sel) { card.hidden = true; return; }
+  card.hidden = false;
+  const { term, hall, h, col } = state.sel, c = DATA.cong[state.day];
+  const inSlot = DATA.flights.filter((f) => f.d === state.day && (col || termGroup(f.tm) === term) && Number(f.t.slice(0, 2)) === h);
+  const airlines = [...new Set(inSlot.map((f) => f.al))].sort((a, b) => a.localeCompare(b, "ko"));
+  if (state.cardAirline && !airlines.includes(state.cardAirline)) state.cardAirline = "";
+  const list = inSlot.filter((f) => !state.cardAirline || f.al === state.cardAirline).sort(issueFirst);
+  $("cardTitle").textContent = col ? `${hh(h)}시 · 전체 출발편` : `${hh(h)}시 · ${term} 출발편`;
+  $("tFlights").textContent = `${fmt(inSlot.length)}편`;
+  $("tFlightsS").textContent = `${col ? "T1+T2" : term} · ${hh(h)}:00~${hh(h)}:59 예정`;
+  const dl = inSlot.filter((f) => f.dly && !f.cx).length, cx = inSlot.filter((f) => f.cx).length;
+  $("tIssue").textContent = `${dl} · ${cx}`; $("tIssue").className = "v" + (dl + cx ? " alert" : "");
+  const t1 = c?.T1?.tot[h] ?? 0, t2 = c?.T2?.tot[h] ?? 0;
+  if (col) {
+    $("tPaxL").textContent = "예상 승객";
+    $("tPax").textContent = `${fmt(t1 + t2)}명`;
+    $("tPaxS").textContent = `T1 ${fmt(t1)} · T2 ${fmt(t2)}명`;
+  } else {
+    $("tPaxL").textContent = `예상 승객 · ${hall}번`;
+    $("tPax").textContent = `${fmt(c?.[term]?.halls[hall]?.[h] ?? 0)}명`;
+    $("tPaxS").textContent = `${term} ${hall}번 출국장 · ${term} 전체 ${fmt(term === "T1" ? t1 : t2)}명`;
+  }
+  $("miniBody").innerHTML = list.length ? list.map((f) => {
+    const est = f.cx ? "—" : (f.e || "—") + (f.ed && f.ed !== f.d ? (f.ed < f.d ? " 전날" : " 다음날") : "");
+    return `<tr><td class="fid">${esc(f.id)}${f.tm === "P02" ? '<span class="tag">탑승동</span>' : ""}</td><td class="dest">${esc(f.dn)}</td>` +
+      `<td class="tm">${f.t} → ${est}</td><td>${statusPill(f)}</td><td class="wx">${wxShort(f.dc)}</td></tr>`;
+  }).join("") : `<tr><td colspan="5" class="empty">이 시간 ${col ? "" : term + " "}출발편이 없어요.</td></tr>`;
+  const sel = $("cardAirline");
+  sel.innerHTML = `<option value="">전체 (${inSlot.length})</option>` + airlines.map((a) => `<option value="${esc(a)}">${esc(a)} (${inSlot.filter((f) => f.al === a).length})</option>`).join("");
+  sel.value = state.cardAirline;
+}
+function drawLink() {
+  const svg = $("link"), view = $("hourview"), card = $("card"), box = $("stripBox");
+  svg.innerHTML = "";
+  const cell = document.querySelector('#strip button.cell[aria-pressed="true"]') || document.querySelector('#strip .hr[aria-pressed="true"]');
+  if (!cell || card.hidden) return;
+  const v = view.getBoundingClientRect(), a = cell.getBoundingClientRect(), b = card.getBoundingClientRect(), sb = box.getBoundingClientRect();
+  if (b.left < a.right + 16) return; // stacked layout: the card sits below the strip
+  if (a.right < sb.left || a.left > sb.right) return; // selected cell scrolled out of view
+  svg.setAttribute("width", v.width); svg.setAttribute("height", v.height); svg.setAttribute("viewBox", `0 0 ${v.width} ${v.height}`);
+  const x1 = Math.min(a.right, sb.right) - v.left + 3, y1 = a.top + a.height / 2 - v.top;
+  const x2 = b.left - v.left - 4, y2 = Math.min(Math.max(y1, b.top - v.top + 28), b.bottom - v.top - 28);
+  svg.innerHTML = `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker></defs>` +
+    `<circle cx="${x1}" cy="${y1}" r="2.5" fill="var(--accent)"/><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--accent)" stroke-width="1.5" marker-end="url(#ah)"/>`;
+}
+
+// ---------- band setter
+function renderSetter() {
+  const vals = hallValues(state.day), t = th(state.day), svg = $("hist");
+  const mid = $("thMid"), high = $("thHigh");
+  const maxV = vals.length ? Math.ceil(vals[vals.length - 1] / 100) * 100 : 1000;
+  for (const r of [mid, high]) { r.min = 0; r.max = maxV; }
+  mid.value = t.mid; high.value = t.high;
+  $("thMidV").textContent = `${fmt(t.mid)}명 이상`; $("thHighV").textContent = `${fmt(t.high)}명 이상`;
+  $("histCap").textContent = `${dayLabel(state.day)} 운영 출국장 × 시간대 ${vals.length}칸의 예상 승객 수(명/시간). 막대 색은 지금 구간 기준이에요.` + (state.th ? " 직접 정한 값을 쓰는 중." : " 기본값은 분포의 50% · 80% 지점.");
+  const counts = { low: 0, mid: 0, high: 0 }; vals.forEach((v) => counts[level(v, t)]++);
+  $("thCount").innerHTML = `<span><i class="sw low"></i>여유 <b class="num">${counts.low}</b>칸</span><span><i class="sw mid"></i>보통 <b class="num">${counts.mid}</b>칸</span><span><i class="sw high"></i>혼잡 <b class="num">${counts.high}</b>칸</span>`;
+  const W = Math.max(280, svg.clientWidth || 600), H = 150, pl = 30, pr = 8, pt = 8, pb = 22;
+  const bin = 100, nb = Math.max(1, maxV / bin), bins = new Array(nb).fill(0);
+  vals.forEach((v) => { bins[Math.min(nb - 1, Math.floor(v / bin))]++; });
+  const ymax = Math.max(1, ...bins), bw = (W - pl - pr) / nb;
+  const x = (v) => pl + (v / maxV) * (W - pl - pr), y = (n) => pt + (1 - n / ymax) * (H - pt - pb);
+  let g = `<line x1="${pl}" x2="${W - pr}" y1="${H - pb}" y2="${H - pb}" stroke="var(--line)"/>`;
+  [0, Math.round(ymax / 2), ymax].forEach((n) => { g += `<text x="${pl - 6}" y="${y(n) + 4}" text-anchor="end">${n}</text>`; if (n) g += `<line x1="${pl}" x2="${W - pr}" y1="${y(n)}" y2="${y(n)}" stroke="var(--line)" stroke-dasharray="2 3"/>`; });
+  bins.forEach((n, i) => { if (!n) return; const lv = level(i * bin + bin / 2, t); g += `<rect x="${pl + i * bw + 1}" y="${y(n)}" width="${Math.max(1, bw - 2)}" height="${H - pb - y(n)}" fill="var(--lv-${lv})" rx="1"><title>${fmt(i * bin)}~${fmt(i * bin + bin - 1)}명: ${n}칸</title></rect>`; });
+  const step = maxV > 2000 ? 500 : 250;
+  for (let v = 0; v <= maxV; v += step) g += `<text x="${x(v)}" y="${H - 6}" text-anchor="middle">${v >= 1000 ? (v / 1000).toFixed(v % 1000 ? 1 : 0) + "k" : v}</text>`;
+  for (const [v, lab] of [[t.mid, "보통"], [t.high, "혼잡"]]) g += `<line x1="${x(v)}" x2="${x(v)}" y1="${pt}" y2="${H - pb}" stroke="var(--ink)" stroke-width="1.5"/><text x="${x(v) + 4}" y="${pt + 10}" text-anchor="start" style="fill:var(--ink)">${lab}</text>`;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.innerHTML = g;
+}
+function onTh(which) {
+  let mid = Number($("thMid").value), high = Number($("thHigh").value);
+  if (which === "mid" && mid >= high) high = mid + 10;
+  if (which === "high" && high <= mid) mid = Math.max(0, high - 10);
+  state.th = { mid, high }; store.set("icn-board-th", state.th);
+  renderSetter(); renderStrip(false); renderFlights();
+}
+
+// ---------- departures table
+function filtered() {
+  const q = state.q.trim().toLowerCase();
+  return DATA.flights.filter((f) => {
+    if (f.d !== state.day) return false;
+    if (state.term && f.tm !== state.term) return false;
+    if (state.airline && f.al !== state.airline) return false;
+    if (state.status === "issue" && !(f.dly || f.cx)) return false;
+    if (state.status === "before" && (f.sg === "departed" || f.cx)) return false;
+    if (state.status === "boarding" && f.sg !== "boarding") return false;
+    if (state.status === "departed" && f.sg !== "departed") return false;
+    if (q && !`${f.dn} ${f.dc} ${f.q} ${f.al}`.toLowerCase().includes(q)) return false;
+    return true;
+  }).sort(issueFirst);
+}
+function recCell(f) {
+  const r = recommend(f);
+  if (!r) return `<span class="muted">-</span>`;
+  const when = `<b>${r.time}</b>까지${r.prevDay ? ' <span class="muted small">(전날)</span>' : ""}`;
+  if (r.noData) return `${when}<br><span class="muted small">전날 혼잡 예고 없음</span>`;
+  if (!r.hall) return `${when}<br><span class="muted small">${r.group} · 운영 출국장 없음</span>`;
+  return `${when}<br><span class="small"><i class="lvdot ${r.lv}"></i>${r.group} ${r.hall}번 · ${LV_TEXT[r.lv]}</span>`;
+}
+function renderFlights() {
+  const rows = filtered(), tb = $("tbody"), all = DATA.flights.filter((f) => f.d === state.day);
+  $("flightCount").textContent = `${fmt(rows.length)}편 / 전체 ${fmt(all.length)}편 · 결항·지연 ${rows.filter((f) => f.cx || f.dly).length}편을 맨 위에`;
+  if (!rows.length) { tb.innerHTML = `<tr><td colspan="8" class="empty">조건에 맞는 출발편이 없어요. 검색어나 필터를 바꿔 보세요.</td></tr>`; $("moreBox").hidden = true; }
+  else {
+    tb.innerHTML = rows.slice(0, state.limit).map((f) => {
+      const cls = f.cx ? "cx" : f.dly ? "dl" : f.sg === "departed" ? "gone" : "";
+      const est = f.e && f.e !== f.t ? f.e + (f.ed && f.ed !== f.d ? (f.ed < f.d ? " 전날" : " 다음날") : "") : "";
+      const cs = f.cs.length ? `<div class="cs">${esc(f.cs.join(" · "))}</div>` : "";
+      const d = !f.cx && f.dl ? (f.dl > 0 ? `<span class="dly ${f.dl >= 15 ? "late" : ""}">+${f.dl}분</span>` : `<span class="dly early">${f.dl}분 (일찍)</span>`) : "";
+      const w = DATA.wx[f.dc];
+      const wx = !w || w[1] == null ? `<span class="muted small">관측값 없음</span>` : `<span class="num">${Math.round(w[1])}°</span> <span class="muted small">습도 ${w[3] ?? "-"}%</span>`;
+      return `<tr class="${cls}"><td class="t">${f.t}</td><td class="t">${est}</td><td><span class="fid">${esc(f.id)}</span><div class="small muted">${esc(f.al)}</div>${cs}</td>` +
+        `<td>${esc(f.dn)}<span class="code">${esc(f.dc)}</span></td><td>${TERM_LABEL[f.tm] || esc(f.tm)}${f.tm === "P02" ? ' <span class="muted small">셔틀</span>' : ""}<div class="small muted num">${esc(f.ci || "")}${f.g ? " · 탑승구 " + esc(f.g) : ""}</div></td>` +
+        `<td>${statusPill(f)}${d}</td><td class="rec">${recCell(f)}</td><td>${wx}</td></tr>`;
+    }).join("");
+    const left = rows.length - state.limit;
+    $("moreBox").hidden = left <= 0; if (left > 0) $("moreBtn").textContent = `${fmt(Math.min(60, left))}편 더 보기 (남은 ${fmt(left)}편)`;
+  }
+  $("clearAll").hidden = !(state.term || state.airline || state.status || state.q);
+}
+function renderFilters() {
+  const seg = $("termSeg"); seg.textContent = "";
+  for (const [v, lab] of [["", "전체"], ["P01", "T1"], ["P02", "탑승동"], ["P03", "T2"]]) {
+    const b = document.createElement("button"); b.type = "button"; b.textContent = lab; b.setAttribute("aria-pressed", String(state.term === v));
+    b.onclick = () => { state.term = v; state.limit = 60; renderFilters(); renderFlights(); renderWeather(); }; seg.append(b);
+  }
+  const counts = {}; DATA.flights.forEach((f) => { if (f.d === state.day) counts[f.al] = (counts[f.al] || 0) + 1; });
+  $("fAirline").innerHTML = `<option value="">항공사 전체</option>` + Object.keys(counts).sort((a, b) => a.localeCompare(b, "ko")).map((a) => `<option value="${esc(a)}">${esc(a)} (${counts[a]})</option>`).join("");
+  $("fAirline").value = state.airline; $("fStatus").value = state.status; $("fSearch").value = state.q;
+}
+
+// ---------- weather
+function renderWeather() {
+  const byDest = new Map();
+  for (const f of filtered()) { const e = byDest.get(f.dc) || { n: 0, name: f.dn }; e.n++; byDest.set(f.dc, e); }
+  const list = [...byDest.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
+  $("wx").innerHTML = list.slice(0, state.wxLimit).map(([code, e]) => {
+    const w = DATA.wx[code];
+    if (!w || w[1] == null) return `<div class="wxc na"><div class="nm"><span>${esc(e.name)}</span><span class="code">${esc(code)}</span></div><div class="tp">관측값 없음</div><div class="dt">오늘 이 목적지 운항편이 없거나 값이 비어 있어요 · ${e.n}편</div></div>`;
+    return `<div class="wxc"><div class="nm"><span>${esc(w[0] || e.name)}</span><span class="code">${esc(code)}</span></div><div class="tp">${Math.round(w[1])}°</div>` +
+      `<div class="dt">${w[2] == null ? "" : `체감 ${Math.round(w[2])}° · `}습도 ${w[3] ?? "-"}% · 바람 ${w[4] ?? "-"}m/s</div><div class="dt">이 목적지 ${e.n}편 · 현재 관측</div></div>`;
+  }).join("") || `<div class="empty">조건에 맞는 목적지가 없어요.</div>`;
+  const left = list.length - state.wxLimit;
+  $("wxMoreBox").hidden = left <= 0; if (left > 0) $("wxMore").textContent = `목적지 ${left}곳 더 보기`;
+}
+
+// ---------- wiring
+function renderAll(animate) { renderHeader(); renderKpis(animate); renderStrip(animate); renderSetter(); renderFilters(); renderFlights(); renderWeather(); }
+$("thMid").oninput = () => onTh("mid"); $("thHigh").oninput = () => onTh("high");
+$("thReset").onclick = () => { state.th = null; store.set("icn-board-th", null); renderSetter(); renderStrip(false); renderFlights(); };
+$("cardAirline").onchange = (e) => { state.cardAirline = e.target.value; renderCard(); drawLink(); };
+$("fAirline").onchange = (e) => { state.airline = e.target.value; state.limit = 60; renderFlights(); renderWeather(); };
+$("fStatus").onchange = (e) => { state.status = e.target.value; state.limit = 60; renderFlights(); renderWeather(); };
+let qT; $("fSearch").oninput = (e) => { clearTimeout(qT); qT = setTimeout(() => { state.q = e.target.value; state.limit = 60; renderFlights(); renderWeather(); }, 120); };
+$("clearAll").onclick = () => { Object.assign(state, { term: "", airline: "", status: "", q: "", limit: 60 }); renderFilters(); renderFlights(); renderWeather(); };
+$("moreBtn").onclick = () => { state.limit += 60; renderFlights(); };
+$("wxMore").onclick = () => { state.wxLimit += 12; renderWeather(); };
+$("stripBox").addEventListener("scroll", () => drawLink(), { passive: true });
+let rT; addEventListener("resize", () => { clearTimeout(rT); rT = setTimeout(() => { renderSetter(); drawLink(); }, 120); });
+if (window.ResizeObserver) new ResizeObserver(() => drawLink()).observe($("hourview"));
+renderAll(true);
+})();
+</script>
