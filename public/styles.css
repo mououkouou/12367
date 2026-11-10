@@ -79,6 +79,14 @@ svg { flex: none; }
 .seg { display: inline-flex; gap: 2px; padding: 3px; background: var(--surface-2); border-radius: 999px; flex-wrap: wrap; }
 .seg button { border: 0; background: transparent; padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 500; color: var(--ink-2); cursor: pointer; white-space: nowrap; }
 .seg button[aria-pressed="true"] { background: var(--surface); color: var(--primary-strong); font-weight: 600; box-shadow: 0 1px 3px rgba(11, 31, 51, .12); }
+.cal { position: relative; display: inline-flex; }
+@media (max-width: 600px) { .seg-d { display: none; } .seg button, .cal-btn { padding: 6px 11px; } }
+.cal-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); padding: 6px 12px; border-radius: 999px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; white-space: nowrap; }
+.cal-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; }
+.cal-btn:hover { border-color: var(--primary); color: var(--primary-strong); }
+.cal-btn[aria-pressed="true"] { background: var(--primary-soft, var(--surface-2)); border-color: var(--primary); color: var(--primary-strong); font-weight: 600; }
+.cal-btn.busy { opacity: .6; cursor: progress; }
+.cal input { position: absolute; left: 0; bottom: 0; width: 100%; height: 0; opacity: 0; border: 0; padding: 0; pointer-events: none; }
 .btn { border: 1px solid var(--line); background: var(--surface); color: var(--ink); padding: 8px 14px; border-radius: var(--r-ctl); font-size: 14px; font-weight: 500; cursor: pointer; transition: border-color .12s, background-color .12s; }
 .btn:hover { border-color: var(--primary); }
 .btn.primary { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }

@@ -22,8 +22,10 @@ const state = {
   term: "", airline: "", status: "", q: "", limit: 60, wxLimit: 12, trendBy: "airlines",
   th: store.get("icn.th", null), watch: store.get("icn.watch", []), travel: store.get("icn.travel", 60),
   lastStatus: store.get("icn.lastStatus", {}), openKey: null, firstPaint: true,
+  pick: null, extra: {}, // calendar date outside today/tomorrow and its loaded departures
 };
-const day = () => state.board?.meta.days[state.dayIdx];
+const day = () => state.pick || state.board?.meta.days[state.dayIdx];
+const boardDays = () => state.board?.meta.days || [];
 
 // ---------- time helpers (KST wall clock carried in UTC fields)
 const ts = (d, hm) => { const [y, m, dd] = d.split("-").map(Number); const [h, mi] = hm.split(":").map(Number); return Date.UTC(y, m - 1, dd, h, mi); };
@@ -49,6 +51,8 @@ async function loadBoard({ manual = false } = {}) {
     const b = await getJson("/api/board");
     const prev = state.board;
     state.board = b;
+    if (state.pick) { if (b.meta.range && (state.pick < b.meta.range.min || state.pick > b.meta.range.max || b.meta.days.includes(state.pick))) state.pick = null; else await loadExtra(state.pick, { quiet: true }); }
+    mergeExtra();
     if (!prev || prev.meta.days[0] !== b.meta.days[0]) { state.sel = null; }
     checkWatchChanges();
     renderAll(state.firstPaint);
@@ -64,6 +68,31 @@ async function loadBoard({ manual = false } = {}) {
   } finally {
     btn.classList.remove("spin");
   }
+}
+
+// Calendar day outside today/tomorrow: departures from /api/day, merged into the board's flight list.
+async function loadExtra(date, { quiet = false } = {}) {
+  try { state.extra[date] = await getJson(`/api/day?date=${date}`); return true; }
+  catch (e) { if (!quiet) toast(`${dayLabel(date)} 운항 자료를 불러오지 못했어요. (${e.message})`); return false; }
+}
+function mergeExtra() {
+  const days = boardDays(), x = state.pick && state.extra[state.pick];
+  state.board.flights = state.board.flights.filter((f) => days.includes(f.d)).concat(x ? x.flights.filter((f) => f.d === state.pick) : []);
+}
+function resetDayView() { state.sel = null; state.cardAirline = ""; state.airline = ""; state.limit = 60; state.wxLimit = 12; }
+async function pickDate(date) {
+  if (!date || !state.board) return;
+  const days = boardDays();
+  if (days.includes(date)) { state.pick = null; state.dayIdx = days.indexOf(date); }
+  else {
+    if (date === state.pick) return;
+    const btn = $("calBtn"); btn.classList.add("busy");
+    const ok = state.extra[date] || await loadExtra(date);
+    btn.classList.remove("busy");
+    if (!ok) { renderHeader(); return; }
+    state.pick = date;
+  }
+  mergeExtra(); resetDayView(); renderAll(true);
 }
 
 async function loadTrends() {
@@ -108,8 +137,9 @@ function watchedFlights() {
   if (!state.board) return [];
   const g = state.board.meta.generatedAt;
   const now = Date.UTC(+g.slice(0, 4), +g.slice(5, 7) - 1, +g.slice(8, 10), +g.slice(11, 13), +g.slice(14, 16));
+  const days = boardDays();
   return state.board.flights
-    .filter((f) => watchMatch(f) && !((f.sg === "departed" || f.cx) && depMs(f) < now - 2 * 3600000))
+    .filter((f) => days.includes(f.d) && watchMatch(f) && !((f.sg === "departed" || f.cx) && depMs(f) < now - 2 * 3600000))
     .sort((a, b) => (a.d + a.t).localeCompare(b.d + b.t));
 }
 function toggleWatch(id, on) {
@@ -174,11 +204,17 @@ function renderHeader() {
   const seg = $("daySeg"); seg.textContent = "";
   m.days.forEach((d, i) => {
     const b = document.createElement("button"); b.type = "button";
-    b.textContent = `${i === 0 ? "오늘" : "내일"} ${dayLabel(d)}`;
-    b.setAttribute("aria-pressed", String(i === state.dayIdx));
-    b.onclick = () => { if (state.dayIdx === i) return; state.dayIdx = i; state.sel = null; state.cardAirline = ""; state.airline = ""; state.limit = 60; state.wxLimit = 12; renderAll(true); };
+    b.innerHTML = `${i === 0 ? "오늘" : "내일"}<span class="seg-d"> ${dayLabel(d)}</span>`; b.title = dayLabel(d);
+    b.setAttribute("aria-pressed", String(!state.pick && i === state.dayIdx));
+    b.onclick = () => pickDate(d);
     seg.append(b);
   });
+  const r = m.range, cal = $("calInput");
+  if (r) { cal.min = r.min; cal.max = r.max; }
+  cal.value = day();
+  $("calBtn").setAttribute("aria-pressed", String(!!state.pick));
+  $("calText").textContent = state.pick ? dayLabel(state.pick) : "날짜 선택";
+  $("calBtn").title = r ? `${dayLabel(r.min)} ~ ${dayLabel(r.max)} 출발편을 볼 수 있어요` : "";
   const label = { live: "실시간", cache: "캐시", stale: "지난 자료", sample: "샘플", missing: "없음" };
   const names = { flights: "운항", passenger: "혼잡 예고", weather: "날씨" };
   $("sourceBadges").innerHTML = Object.entries(m.sources).map(([k, s]) => {
@@ -199,7 +235,9 @@ function renderHeader() {
   } else if (Object.values(m.sources).some((s) => s.status === "stale")) {
     n.hidden = false; n.innerHTML = `<b>최근 자료로 보여주는 중</b><span>새 자료를 받지 못해 마지막으로 받은 자료를 보여주고 있어요.</span>`;
   } else n.hidden = true;
-  $("lead").textContent = `${dayLabel(m.days[0])} · ${dayLabel(m.days[1])} 인천공항 출발편, 시간대별 출국장 혼잡, 목적지 날씨`;
+  $("lead").textContent = state.pick
+    ? `${dayLabel(state.pick)} 인천공항 출발편과 지연·결항 · 혼잡 예고는 오늘·내일만, 날씨는 현재 관측값`
+    : `${dayLabel(m.days[0])} · ${dayLabel(m.days[1])} 인천공항 출발편, 시간대별 출국장 혼잡, 목적지 날씨`;
   $("footAsof").textContent = `자료 기준 ${m.generatedAt.slice(0, 10)} ${m.generatedAt.slice(11, 16)} · 운항 5분 · 날씨 30분 단위로 새로 받아요.`;
 }
 
@@ -211,9 +249,9 @@ function renderKpis(animate) {
   const [ph, pv] = peak(d);
   const cards = [
     { lab: "출발편", v: fl.length, unit: "편", s: "공동운항은 1편으로 합침" },
-    { lab: "지연", v: delayed, unit: "편", s: state.dayIdx === 0 ? "15분 이상 늦거나 '지연' 표시" : "내일 편은 아직 변경 시각 없음", alert: delayed > 0 },
+    { lab: "지연", v: delayed, unit: "편", s: d <= boardDays()[0] ? "15분 이상 늦거나 '지연' 표시" : "앞으로 출발할 편이라 변경 시각이 아직 적어요", alert: delayed > 0 },
     { lab: "결항", v: cancelled, unit: "편", s: cancelled ? "표 맨 위에 표시" : "결항 편 없음", alert: cancelled > 0 },
-    { lab: "가장 붐비는 시간", v: ph, unit: "시", pad: true, s: pv ? `T1+T2 ${fmt(pv)}명 예상` : "혼잡 예고 없음" },
+    { lab: "가장 붐비는 시간", v: pv ? ph : "-", unit: pv ? "시" : "", pad: true, s: pv ? `T1+T2 ${fmt(pv)}명 예상` : "혼잡 예고 없음" },
     { lab: "목적지", v: new Set(fl.map((f) => f.dc)).size, unit: "곳", s: "출발편 기준 도착 공항" },
   ];
   const box = $("kpis"); box.textContent = "";
@@ -222,14 +260,14 @@ function renderKpis(animate) {
     el.innerHTML = `<span class="lab">${k.lab}</span><span class="val"><span></span><small>${k.unit}</small></span><span class="s">${esc(k.s)}</span>`;
     box.append(el);
     const n = el.querySelector(".val span");
-    if (k.pad) n.textContent = hh(k.v); else countUp(n, k.v, animate);
+    if (k.pad) n.textContent = typeof k.v === "number" ? hh(k.v) : k.v; else countUp(n, k.v, animate);
   }
 }
 
 // ---------- my flights
 // Why a watched flight has no card: it already left (hidden 2h after departure) or it does not fly today/tomorrow.
 function missingText(w) {
-  const past = state.board.flights.filter((f) => f.q.split(" ").includes(w)).sort((a, b) => (b.d + b.t).localeCompare(a.d + a.t))[0];
+  const past = state.board.flights.filter((f) => state.board.meta.days.includes(f.d) && f.q.split(" ").includes(w)).sort((a, b) => (b.d + b.t).localeCompare(a.d + a.t))[0];
   const days = state.board.meta.days;
   if (past) {
     const other = days.filter((d) => d !== past.d).map(dayLabel).join("·");
@@ -269,7 +307,7 @@ function renderMine() {
 function defaultSel(d) {
   const c = state.board.cong[d]; if (!c || !c.T1) return null;
   const nowH = Number(state.board.meta.generatedAt.slice(11, 13));
-  const h = state.dayIdx === 0 ? nowH : peak(d)[0];
+  const h = d === boardDays()[0] ? nowH : peak(d)[0];
   let best = null;
   for (const [hall, s] of Object.entries(c.T1.halls)) if (!best || s[h] > best[1]) best = [hall, s[h]];
   return best ? { term: "T1", hall: best[0], h } : { col: true, h };
@@ -277,7 +315,7 @@ function defaultSel(d) {
 function renderStrip(animate) {
   const strip = $("strip"); strip.textContent = "";
   const d = day(), c = state.board.cong[d], t = th(d);
-  if (!c) { strip.innerHTML = `<p class="empty" style="grid-column:1/-1">이 날짜의 출국장 혼잡 예고가 없어요.</p>`; state.sel = null; renderCard(); drawLink(); return; }
+  if (!c) { strip.innerHTML = `<p class="empty" style="grid-column:1/-1">${state.pick ? `출국장 혼잡 예고는 공항이 오늘·내일 것만 제공해요. ${esc(dayLabel(d))}에는 출발편과 지연·결항만 볼 수 있어요.` : "이 날짜의 출국장 혼잡 예고가 없어요."}</p>`; state.sel = null; renderCard(); drawLink(); return; }
   if (!state.sel) state.sel = defaultSel(d);
   strip.append(Object.assign(document.createElement("div"), { className: "rl", textContent: "시간" }));
   for (let h = 0; h < 24; h++) {
@@ -604,6 +642,8 @@ function renderAll(animate) {
 }
 
 $("refreshBtn").onclick = () => loadBoard({ manual: true });
+$("calBtn").onclick = () => { const c = $("calInput"); try { c.showPicker(); } catch (e) { c.focus(); c.click(); } };
+$("calInput").onchange = (e) => pickDate(e.target.value);
 $("thMid").oninput = () => onTh("mid"); $("thHigh").oninput = () => onTh("high");
 $("thReset").onclick = () => { state.th = null; store.set("icn.th", null); renderSetter(); renderStrip(false); renderFlights(); renderMine(); };
 $("cardAirline").onchange = (e) => { state.cardAirline = e.target.value; renderCard(); drawLink(); };

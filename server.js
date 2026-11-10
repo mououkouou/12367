@@ -22,6 +22,7 @@ for (const name of [".env.local", ".env"]) {
 const API = {
   board: require("./api/board"),
   trends: require("./api/trends"),
+  day: require("./api/day"),
   health: require("./api/health"),
 };
 const TYPES = {

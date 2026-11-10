@@ -25,6 +25,10 @@
     </nav>
     <div class="appbar-r">
       <div class="seg" role="group" aria-label="날짜" id="daySeg"></div>
+      <div class="cal">
+        <button class="cal-btn" id="calBtn" type="button" aria-pressed="false" aria-label="달력에서 날짜 선택"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15.5" rx="2.5"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg><span id="calText">날짜 선택</span></button>
+        <input type="date" id="calInput" tabindex="-1" aria-hidden="true">
+      </div>
       <button class="refresh" id="refreshBtn" type="button" aria-label="새로고침"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5"/></svg><span id="updatedAt">불러오는 중</span></button>
     </div>
   </div>
