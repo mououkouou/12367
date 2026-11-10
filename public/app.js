@@ -53,6 +53,10 @@ async function loadBoard({ manual = false } = {}) {
     checkWatchChanges();
     renderAll(state.firstPaint);
     state.firstPaint = false;
+    // Fallback data because the API hiccupped (not a missing key): try again in a minute instead of five.
+    const degraded = Object.values(b.meta.sources).filter((s) => s.status === "sample" || s.status === "missing" || s.status === "stale");
+    clearTimeout(state.retryTimer);
+    if (degraded.length && !degraded.every((s) => s.reason === "NO_KEY")) state.retryTimer = setTimeout(() => loadBoard(), 60 * 1000);
     if (manual) toast(`새로 불러왔어요 · ${stamp(b.meta.generatedAt)}`);
   } catch (e) {
     toast(`자료를 불러오지 못했어요. 잠시 후 다시 시도해 주세요. (${e.message})`);
@@ -148,6 +152,8 @@ function countUp(el, to, animate) {
   const start = performance.now(), dur = 900;
   const step = (now) => { const p = Math.min(1, (now - start) / dur); el.textContent = fmt(Math.round(to * (1 - Math.pow(1 - p, 3)))); if (p < 1) requestAnimationFrame(step); };
   el.textContent = "0"; requestAnimationFrame(step);
+  // Background tabs pause animation frames: make sure the final number always lands.
+  setTimeout(() => { el.textContent = fmt(to); }, dur + 150);
 }
 function pill(f) {
   if (f.cx) return `<span class="pill cx">결항</span>`;
@@ -182,10 +188,14 @@ function renderHeader() {
   const n = $("notice");
   const sampleSrc = Object.entries(m.sources).filter(([, s]) => s.status === "sample" || s.status === "missing");
   if (sampleSrc.length) {
-    const why = sampleSrc[0][1].reason === "NO_KEY" ? "서버에 인증키가 설정되지 않아" : "공공데이터 API 연결이 원활하지 않아";
+    const reason = sampleSrc[0][1].reason;
+    const why = reason === "NO_KEY" ? "서버에 인증키가 설정되지 않아"
+      : reason === "HTTP_429" ? "공공데이터 API에 요청이 잠시 몰려"
+      : "공공데이터 API 연결이 원활하지 않아";
+    const retry = reason === "NO_KEY" ? "" : " 1분 뒤 자동으로 다시 불러올게요.";
     const at = sampleSrc.find(([, s]) => s.at)?.[1].at;
     n.hidden = false;
-    n.innerHTML = `<b>샘플 자료로 보여주는 중</b><span>${why} 저장된 샘플 자료${at ? `(자료일 ${esc(at.slice(0, 10))})` : ""}를 보여주고 있어요. ${sampleSrc.map(([k]) => names[k]).join(" · ")} 자료가 해당돼요.</span>`;
+    n.innerHTML = `<b>샘플 자료로 보여주는 중</b><span>${why} 저장된 샘플 자료${at ? `(자료일 ${esc(at.slice(0, 10))})` : ""}를 보여주고 있어요. ${sampleSrc.map(([k]) => names[k]).join(" · ")} 자료가 해당돼요.${retry}</span>`;
   } else if (Object.values(m.sources).some((s) => s.status === "stale")) {
     n.hidden = false; n.innerHTML = `<b>최근 자료로 보여주는 중</b><span>새 자료를 받지 못해 마지막으로 받은 자료를 보여주고 있어요.</span>`;
   } else n.hidden = true;
