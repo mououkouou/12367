@@ -27,8 +27,10 @@
 | 기상 정보 (출발편 도착지) | `/api/board` | 30분 |
 | 여객기 운항 현황 상세 (지난 3일) | `/api/trends` | 6시간 |
 | 여객기 운항 현황 상세 (달력에서 고른 날) | `/api/day?date=YYYY-MM-DD` | 오늘 기준 3일 전 ~ 6일 뒤만. 지난 날 6시간, 오늘 이후 5분 |
+| AI 분석 (OpenAI Responses API) | `POST /api/analyze` | 같은 화면 10분 캐시. 화면 집계값만 보내고, 답의 숫자가 보낸 값에 없으면 다시 요청하거나 보여주지 않음. `OPENAI_API_KEY`·`OPENAI_MODEL`(기본 gpt-6-luna) 필요 |
 
 - 인증키는 **서버 환경 변수 `DATA_GO_KR_KEY`에서만** 읽습니다. 브라우저 코드와 API 응답에는 키가 들어가지 않습니다.
+- AI 분석 키는 **서버 환경 변수 `OPENAI_API_KEY`**, 모델은 `OPENAI_MODEL`(기본 `gpt-6-luna`)에서 읽습니다. 키가 없으면 AI 패널에 "설정되지 않음" 안내가 뜨고 나머지 화면은 그대로 동작합니다.
 - API가 막히면(키 없음, 한도 초과, 오류) 마지막으로 받은 캐시, 그것도 없으면 `data/samples/` 자료로 화면을 띄우고 상단에 안내합니다.
 - 캐시 파일: 로컬은 `data/cache/`, Vercel은 `/tmp/icn-cache` (git에 올라가지 않음).
 
@@ -53,7 +55,7 @@ npm start
 
 1. GitHub 저장소에 올립니다.
 2. Vercel에서 저장소를 가져옵니다(Framework Preset: Other, 빌드 명령 없음). `vercel.json`이 `public/`을 정적 파일로, `api/*.js`를 서버 함수로 배포합니다.
-3. Project → Settings → Environment Variables에 `DATA_GO_KR_KEY`를 추가하고 다시 배포합니다.
+3. Project → Settings → Environment Variables에 `DATA_GO_KR_KEY`(필수)와 `OPENAI_API_KEY`·`OPENAI_MODEL`(AI 분석용)을 추가하고 다시 배포합니다.
 
 ## 폴더
 

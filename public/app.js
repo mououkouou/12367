@@ -22,7 +22,8 @@ const state = {
   term: "", airline: "", status: "", q: "", limit: 60, wxLimit: 12, trendBy: "airlines",
   th: store.get("icn.th", null), watch: store.get("icn.watch", []), travel: store.get("icn.travel", 60),
   lastStatus: store.get("icn.lastStatus", {}), openKey: null, firstPaint: true,
-  pick: null, extra: {}, // calendar date outside today/tomorrow and its loaded departures
+  pick: null, extra: {}, sort: "issue", trendDay: "all",
+  ai: { key: null, loading: false, result: null, error: null, seq: 0 }, // AI analysis of the current selection // calendar date outside today/tomorrow and its loaded departures
 };
 const day = () => state.pick || state.board?.meta.days[state.dayIdx];
 const boardDays = () => state.board?.meta.days || [];
@@ -185,13 +186,27 @@ function countUp(el, to, animate) {
   // Background tabs pause animation frames: make sure the final number always lands.
   setTimeout(() => { el.textContent = fmt(to); }, dur + 150);
 }
+// Status = icon + label + colour (never colour alone).
+const ICON = {
+  ok: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  late: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg>',
+  cx: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M8.8 8.8l6.4 6.4M15.2 8.8l-6.4 6.4"/></svg>',
+  board: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12h11M11 7l5 5-5 5M20 5v14"/></svg>',
+  plain: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/></svg>',
+  all: '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h10"/></svg>',
+  check: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+  bulb: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.6 10.8c.6.5 1 1.2 1 2V16h5.2v-.2c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z"/></svg>',
+};
+function pillKind(f) { return f.cx ? "cx" : f.sg === "delayed" ? "late" : f.sg === "departed" ? (f.dly ? "late" : "ok") : f.sg === "boarding" ? "board" : "plain"; }
 function pill(f) {
-  if (f.cx) return `<span class="pill cx">결항</span>`;
-  if (f.sg === "delayed") return `<span class="pill late">지연</span>`;
-  if (f.sg === "departed") return f.dly ? `<span class="pill late">지연 출발</span>` : `<span class="pill ok">출발</span>`;
-  if (f.sg === "boarding") return `<span class="pill board">${esc(f.st)}</span>`;
-  return `<span class="pill plain">${esc(f.st || "예정")}</span>`;
+  const k = pillKind(f);
+  const label = f.cx ? "결항" : f.sg === "delayed" ? "지연" : f.sg === "departed" ? (f.dly ? "지연 출발" : "출발") : esc(f.st || "예정");
+  return `<span class="pill ${k}">${ICON[k]}${label}</span>`;
 }
+// KST wall clock now, in the same "UTC fields = KST" frame as ts().
+function nowMs() { const n = new Date(Date.now() + 9 * 3600000); return Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate(), n.getUTCHours(), n.getUTCMinutes()); }
+function leftText(ms) { const m = Math.round((ms - nowMs()) / 60000); if (m <= 0) return null; const h = Math.floor(m / 60), mm = m % 60; return h ? `${h}시간 ${mm}분` : `${mm}분`; }
+const flightsAt = () => (state.pick ? state.extra[state.pick]?.meta.source.at : state.board.meta.sources.flights?.at) || state.board.meta.generatedAt;
 const wx = (code) => state.board.wx[code];
 const wxShort = (code) => { const w = wx(code); return !w || w[1] == null ? "관측값 없음" : `${Math.round(w[1])}° · 습도 ${w[3] ?? "-"}%`; };
 const estLabel = (f) => (f.cx ? "—" : (f.e || "—") + (f.ed && f.ed !== f.d ? (f.ed < f.d ? " (전날)" : " (다음날)") : ""));
@@ -200,7 +215,9 @@ const issueFirst = (a, b) => ((a.cx ? 0 : a.dly ? 1 : 2) - (b.cx ? 0 : b.dly ? 1
 // ---------- header, notice, badges
 function renderHeader() {
   const m = state.board.meta;
-  $("updatedAt").textContent = `${stamp(m.generatedAt).slice(6)} 갱신`;
+  $("updatedAt").textContent = `${stamp(m.generatedAt).slice(6)} 기준`;
+  $("refreshBtn").title = `자료 기준 ${stamp(m.generatedAt)} (KST) · 누르면 새로 불러와요`;
+  $("heroDate").textContent = `${dayLabel(day())} 출발`;
   const seg = $("daySeg"); seg.textContent = "";
   m.days.forEach((d, i) => {
     const b = document.createElement("button"); b.type = "button";
@@ -235,33 +252,46 @@ function renderHeader() {
   } else if (Object.values(m.sources).some((s) => s.status === "stale")) {
     n.hidden = false; n.innerHTML = `<b>최근 자료로 보여주는 중</b><span>새 자료를 받지 못해 마지막으로 받은 자료를 보여주고 있어요.</span>`;
   } else n.hidden = true;
+  document.body.classList.toggle("has-notice", !n.hidden);
   $("lead").textContent = state.pick
-    ? `${dayLabel(state.pick)} 인천공항 출발편과 지연·결항 · 혼잡 예고는 오늘·내일만, 날씨는 현재 관측값`
-    : `${dayLabel(m.days[0])} · ${dayLabel(m.days[1])} 인천공항 출발편, 시간대별 출국장 혼잡, 목적지 날씨`;
-  $("footAsof").textContent = `자료 기준 ${m.generatedAt.slice(0, 10)} ${m.generatedAt.slice(11, 16)} · 운항 5분 · 날씨 30분 단위로 새로 받아요.`;
+    ? `${dayLabel(state.pick)} 인천공항 출발편과 지연·결항을 보고 있어요. 출국장 혼잡 예고는 공항이 오늘·내일만 제공해요.`
+    : `내 출장 편 상태와 권장 도착, 출국장 혼잡, 지연 흐름, 목적지 날씨까지 — 공항 공식 자료로 정리했어요.`;
+  $("footAsof").textContent = `최신 갱신 ${m.generatedAt.slice(0, 10)} ${m.generatedAt.slice(11, 16)} (KST) · 운항 ${stamp(m.sources.flights?.at).slice(6)} · 승객 예고 ${stamp(m.sources.passenger?.at).slice(6)} · 날씨 ${stamp(m.sources.weather?.at).slice(6)}`;
 }
 
 // ---------- KPIs
 function peak(d) { const c = state.board.cong[d]; let h = 0, v = 0; if (c) for (let i = 0; i < 24; i++) { const s = (c.T1?.tot[i] || 0) + (c.T2?.tot[i] || 0); if (s > v) { v = s; h = i; } } return [h, v]; }
 function renderKpis(animate) {
-  const d = day(), fl = state.board.flights.filter((f) => f.d === d);
+  const d = day(), days = boardDays(), fl = state.board.flights.filter((f) => f.d === d), c = state.board.cong[d];
   const delayed = fl.filter((f) => f.dly && !f.cx).length, cancelled = fl.filter((f) => f.cx).length;
+  const dests = new Set(fl.map((f) => f.dc)).size;
+  const perHour = new Array(24).fill(0); fl.forEach((f) => { const h = Number(f.t.slice(0, 2)); if (h >= 0 && h < 24) perHour[h]++; });
+  const isToday = d === days[0], nowH = isToday ? Number(state.board.meta.generatedAt.slice(11, 13)) : -1, maxH = Math.max(1, ...perHour);
+  const paxTot = c ? ["T1", "T2"].reduce((a, t) => a + (c[t] ? c[t].tot.reduce((x, y) => x + y, 0) : 0), 0) : 0;
   const [ph, pv] = peak(d);
-  const cards = [
-    { lab: "출발편", v: fl.length, unit: "편", s: "공동운항은 1편으로 합침" },
-    { lab: "지연", v: delayed, unit: "편", s: d <= boardDays()[0] ? "15분 이상 늦거나 '지연' 표시" : "앞으로 출발할 편이라 변경 시각이 아직 적어요", alert: delayed > 0 },
-    { lab: "결항", v: cancelled, unit: "편", s: cancelled ? "표 맨 위에 표시" : "결항 편 없음", alert: cancelled > 0 },
-    { lab: "가장 붐비는 시간", v: pv ? ph : "-", unit: pv ? "시" : "", pad: true, s: pv ? `T1+T2 ${fmt(pv)}명 예상` : "혼잡 예고 없음" },
-    { lab: "목적지", v: new Set(fl.map((f) => f.dc)).size, unit: "곳", s: "출발편 기준 도착 공항" },
-  ];
-  const box = $("kpis"); box.textContent = "";
-  for (const k of cards) {
-    const el = document.createElement("div"); el.className = "kpi" + (k.alert ? " alert" : "");
-    el.innerHTML = `<span class="lab">${k.lab}</span><span class="val"><span></span><small>${k.unit}</small></span><span class="s">${esc(k.s)}</span>`;
-    box.append(el);
-    const n = el.querySelector(".val span");
-    if (k.pad) n.textContent = typeof k.v === "number" ? hh(k.v) : k.v; else countUp(n, k.v, animate);
-  }
+  const nowPax = c && isToday ? (c.T1?.tot[nowH] || 0) + (c.T2?.tot[nowH] || 0) : null;
+  const at = stamp(flightsAt()).slice(6);
+  // hero: today's operational status (official data only)
+  $("heroStats").innerHTML = `<li><span>출발</span><b>${fmt(fl.length)}</b>편</li><li class="late">${ICON.late}<span>지연</span><b>${fmt(delayed)}</b>편</li><li class="cx">${ICON.cx}<span>결항</span><b>${fmt(cancelled)}</b>편</li><li class="asof">${esc(dayLabel(d))} · 운항 자료 ${esc(at)} 기준 · 공항 공식 자료</li>`;
+  $("snapSub").textContent = `${dayLabel(d)} · 운항 자료 ${at} 기준 (KST)`;
+  const busiest = perHour.indexOf(Math.max(...perHour));
+  $("kpis").innerHTML = `
+    <article class="kpi k-main"><span class="lab">출발 예정 편수 <span class="src-tag off">공항 자료</span></span>
+      <span class="val"><span data-n="${fl.length}">0</span><small>편</small></span>
+      <span class="s">${esc(dayLabel(d))} · 공동운항은 1편으로 합침 · 목적지 ${fmt(dests)}곳</span>
+      <div class="spark"><div class="spark-bars" role="img" aria-label="시간대별 출발 예정 편수. 가장 많은 시간 ${hh(busiest)}시 ${perHour[busiest]}편">${perHour.map((n, h) => `<i class="${h === nowH ? "now" : ""}" style="height:${Math.max(2, Math.round((n / maxH) * 100))}%" data-tip="${hh(h)}시 출발 예정 <b>${n}편</b>"></i>`).join("")}</div>
+        <div class="spark-ax" aria-hidden="true"><span>00시</span><span>06시</span><span>12시</span><span>18시</span><span>23시</span></div>
+        <span class="s">시간대별 출발 예정 편수${nowH >= 0 ? " · 민트색 막대가 지금 시각" : ""}</span></div></article>
+    <article class="kpi k-issue"><span class="lab">지연 · 결항 <span class="src-tag off">공항 자료</span></span>
+      <div class="issue-row"><div><span class="st late">${ICON.late}지연</span><span class="val"><span data-n="${delayed}">0</span><small>편</small></span></div>
+        <div><span class="st cx">${ICON.cx}결항</span><span class="val"><span data-n="${cancelled}">0</span><small>편</small></span></div></div>
+      <span class="s">${d <= days[0] ? "지연 = 15분 이상 늦거나 공항이 '지연'으로 표시 · 해당 편은 운항 현황 맨 위에 보여요" : "앞으로 출발할 편이라 변경 시각이 아직 적어요"}</span></article>
+    <article class="kpi k-pax"><span class="lab">출국 예상 승객 <span class="src-tag off">공항 예고</span></span>
+      ${c ? `<span class="val"><span data-n="${paxTot}">0</span><small>명</small></span><span class="s">T1+T2 출국장 하루 합계</span>` : `<span class="val">-</span><span class="s">이 날짜는 혼잡 예고가 없어요 (공항이 오늘·내일만 제공)</span>`}</article>
+    <article class="kpi k-peak"><span class="lab">가장 붐비는 시간 <span class="src-tag off">공항 예고</span></span>
+      ${pv ? `<span class="val">${hh(ph)}<small>시</small></span><span class="s">T1+T2 ${fmt(pv)}명 예상${nowPax != null ? ` · 지금 ${hh(nowH)}시 ${fmt(nowPax)}명` : ""}</span>` : `<span class="val">-</span><span class="s">혼잡 예고 없음</span>`}</article>`;
+  $("kpis").querySelectorAll("[data-n]").forEach((el) => countUp(el, Number(el.dataset.n), animate));
+  $("kpis").querySelectorAll("[data-tip]").forEach((el) => { el.onpointerenter = (e) => showTip(e, el.dataset.tip); el.onpointermove = moveTip; el.onpointerleave = hideTip; });
 }
 
 // ---------- my flights
@@ -280,27 +310,75 @@ function missingText(w) {
 function renderMine() {
   const box = $("mineList"), list = watchedFlights();
   if (!state.watch.length) {
-    box.innerHTML = `<div class="empty-mine"><b>아직 담은 편이 없어요</b><span>위 입력칸에 편명을 넣거나, 출발편 표에서 ☆를 누르면 여기 모여요. 공동운항 편명(예: KE5951)으로 넣어도 실제 운항편을 찾아줘요.</span></div>`;
+    box.innerHTML = `<div class="spot-empty"><img src="/icn/empty-flight.svg" width="400" height="260" alt="" aria-hidden="true" loading="lazy">
+      <div><h3>아직 등록한 출장 편이 없어요</h3><p>편명을 넣으면 출발 상태, 권장 공항 도착 시각(자체 계산), 출발 전 체크리스트를 이곳에 크게 보여드려요.</p>
+      <ol><li>위 입력칸에 편명 입력 — 공동운항 편명(예: KE5951)도 실제 운항편을 찾아줘요</li><li>또는 운항 현황 표에서 ☆ 누르기</li></ol>
+      <button class="btn primary" type="button" data-focus-add>편명 입력하기</button></div></div>`;
     return;
   }
   const missing = state.watch.filter((w) => !list.some((f) => f.q.split(" ").includes(w)));
-  box.innerHTML = list.map((f) => {
-    const r = recommend(f), k = fKey(f);
-    const when = r ? r.time : "-", whenSub = r && r.prevDay ? "전날 밤" : "";
-    const where = r && r.hall ? `${r.group} ${r.hall}번` : r ? r.group : "-";
-    const w = wx(f.dc);
-    return `<article class="mf${state.flash === k ? " flash" : ""}" data-key="${esc(k)}" tabindex="0">
-      <div class="mf-top"><div><div class="mf-id">${esc(f.id)}</div><div class="mf-route">${esc(dayLabel(f.d))} ${f.t} · ${esc(f.dn)} ${esc(f.dc)}</div></div>${pill(f)}</div>
-      <div class="mf-grid">
-        <div><span>권장 도착</span><b>${esc(when)}</b>${whenSub ? `<small>${whenSub}</small>` : ""}</div>
-        <div><span>출국장</span><b>${esc(where)}</b></div>
-        <div><span>${f.e && f.e !== f.t && !f.cx ? "변경 출발" : "체크인"}</span><b>${f.e && f.e !== f.t && !f.cx ? esc(estLabel(f)) : esc(f.ci || "-")}</b></div>
-      </div>
-      <div class="mf-route">${esc(TERM_LABEL[f.tm] || f.tm)}${f.g ? " · 탑승구 " + esc(f.g) : ""} · ${w && w[1] != null ? `${esc(f.dn)} ${Math.round(w[1])}°` : `${esc(f.dn)} 날씨 자료 없음`}</div>
-      <button class="icon-btn mf-x" type="button" data-unwatch="${esc(f.q.split(" ").find((x) => state.watch.includes(x)))}" aria-label="${esc(f.id)} 내 출장 편에서 빼기"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
-    </article>`;
-  }).join("") + missing.map((w) => `<div class="empty-mine"><b>${esc(w)}</b><span>${missingText(w)}</span><button class="btn ghost" type="button" data-unwatch="${esc(w)}">목록에서 빼기</button></div>`).join("");
+  const now = nowMs();
+  const lead = list.find((f) => !f.cx && f.sg !== "departed" && depMs(f) >= now - 10 * 60000) || list[0];
+  const rest = list.filter((f) => f !== lead);
+  const others = rest.map(miniCard).join("") + missing.map((w) => `<div class="empty-mine"><b>${esc(w)}</b><span>${missingText(w)}</span><button class="btn ghost" type="button" data-unwatch="${esc(w)}">목록에서 빼기</button></div>`).join("");
+  box.innerHTML = (lead ? spotlight(lead) : "") + (others ? `<div class="others">${others}</div>` : "");
   state.flash = null;
+}
+function miniCard(f) {
+  const r = recommend(f), k = fKey(f);
+  const where = r && r.hall ? `${r.group} ${r.hall}번` : r ? r.group : "-";
+  return `<article class="mf${state.flash === k ? " flash" : ""}" data-key="${esc(k)}" tabindex="0" aria-label="${esc(f.id)} ${esc(f.dn)} 출발 플래너 열기">
+    <div class="mf-top"><div><div class="mf-id">${esc(f.id)}</div><div class="mf-route">${esc(dayLabel(f.d))} ${f.t} · ICN → ${esc(f.dc)} ${esc(f.dn)}</div></div>${pill(f)}</div>
+    <div class="mf-grid"><div><span>권장 도착</span><b>${r ? r.time : "-"}</b>${r && r.prevDay ? "<small>전날 밤</small>" : ""}</div><div><span>출국장</span><b>${esc(where)}</b></div>
+      <div><span>${f.e && f.e !== f.t && !f.cx ? "변경 출발" : "체크인"}</span><b>${f.e && f.e !== f.t && !f.cx ? esc(estLabel(f)) : esc(f.ci || "-")}</b></div></div>
+    <button class="icon-btn mf-x" type="button" data-unwatch="${esc(f.q.split(" ").find((x) => state.watch.includes(x)))}" aria-label="${esc(f.id)} 내 출장 편에서 빼기"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </article>`;
+}
+function spotlight(f) {
+  const r = recommend(f), k = fKey(f), dep = depMs(f), now = nowMs(), w = wx(f.dc);
+  const changed = f.e && f.e !== f.t && !f.cx;
+  const left = f.cx ? null : leftText(dep);
+  const cd = f.cx ? `<div class="countdown"><span>상태</span><b>결항 · 항공사 안내 확인</b></div>`
+    : f.sg === "departed" ? `<div class="countdown"><span>상태</span><b>출발했어요</b></div>`
+    : left ? `<div class="countdown"><span>출발까지 · ${changed ? "변경" : "예정"} 시각 기준</span><b>${left}</b></div>`
+    : `<div class="countdown"><span>출발 시각</span><b>지났어요 · 상태 확인 중</b></div>`;
+  const where = r && r.hall ? `${r.group} ${r.hall}번 출국장` : r ? `${r.group} · 출국장 예고 없음` : "";
+  const travel = state.travel, arrive = r ? r.ms : dep - 150 * 60000;
+  const steps = f.cx ? [] : [
+    [arrive - travel * 60000, "집 · 회사에서 출발", `공항까지 ${travel}분 기준`],
+    [arrive, "공항 도착 (권장)", r && r.hall ? `${r.group} ${r.hall}번 출국장 · ${LV_TEXT[r.lv]}${r.busy ? " · 혼잡해서 30분 일찍" : ""}` : "출국장 예고 없음 · 출발 2시간 30분 전"],
+    [dep - 60 * 60000, "체크인 · 수하물 마감 무렵", `일반적 기준 · 카운터 ${f.ci || "-"}`],
+    [dep - 40 * 60000, "탑승 시작 무렵", `일반적 기준 · 탑승구 ${f.g || "-"}`],
+    [dep, changed ? "출발 (변경 시각)" : "출발", `${f.dn} ${f.dc}행`],
+  ];
+  let next = steps.findIndex((s) => s[0] > now); if (next < 0) next = steps.length;
+  const items = steps.map((s, i) => {
+    const st = i < next ? "done" : i === next ? "next" : "";
+    const dsh = dayOf(s[0]) !== f.d ? (dayOf(s[0]) < f.d ? "전날" : "다음날") : "";
+    return `<li class="${st}"><span class="mk">${ICON.check}</span><span class="ct"><b>${s[1]}${st === "done" ? '<span class="sr"> (지난 단계)</span>' : st === "next" ? '<span class="sr"> (다음 단계)</span>' : ""}</b><span>${esc(s[2])}</span></span><span class="tm">${hmOf(s[0])}${dsh ? `<small>${dsh}</small>` : ""}</span></li>`;
+  }).join("");
+  const unwatch = esc(f.q.split(" ").find((x) => state.watch.includes(x)) || f.id);
+  return `<article class="spot${state.flash === k ? " flash" : ""}" data-spot="${esc(k)}" aria-label="대표 출장 편 ${esc(f.id)}">
+    <div class="spot-main">
+      <div class="spot-top"><span class="fid">${esc(f.id)}</span><span class="al">${esc(f.al)}${f.cs.length ? ` · 공동운항 ${esc(f.cs.slice(0, 3).join(", "))}${f.cs.length > 3 ? " 외" : ""}` : ""}</span>${pill(f)}</div>
+      <div class="route"><div class="ap"><b>ICN</b><span>인천 · ${esc(TERM_LABEL[f.tm] || f.tm)}</span></div><div class="path" aria-hidden="true"></div>
+        <div class="ap to"><b>${esc(f.dc)}</b><span>${esc(f.dn)}${w && w[1] != null ? ` · 현재 ${Math.round(w[1])}°` : ""}</span></div></div>
+      <div class="times"><div class="${changed ? "was" : ""}"><span>${esc(dayLabel(f.d))} 예정</span><b>${f.t}</b></div>${changed ? `<div class="chg"><span>변경 출발</span><b>${esc(estLabel(f))}</b></div>` : ""}${cd}</div>
+      <div class="facts">
+        <div><span>터미널</span><b>${esc(TERM_SHORT[f.tm] || f.tm)}</b><small>${f.tm === "P02" ? "T1 수속 후 셔틀" : esc(TERM_LABEL[f.tm] || "")}</small></div>
+        <div><span>체크인 카운터</span><b>${esc(f.ci || "-")}</b><small>공항 자료</small></div>
+        <div><span>탑승구</span><b>${esc(f.g || "-")}</b><small>공항 자료</small></div>
+        <div class="key"><span>권장 공항 도착 <span class="calc">자체 계산</span></span><b>${r ? r.time : "-"}</b><small>${r ? `${r.prevDay ? "전날 · " : ""}${esc(where)}` : "결항"}</small></div>
+      </div>
+      <div class="spot-act"><button class="btn primary" type="button" data-open="${esc(k)}">출발 플래너 열기</button><button class="btn ghost" type="button" data-unwatch="${unwatch}">내 출장 편에서 빼기</button><span class="fine">${DISCLAIMER}</span></div>
+    </div>
+    <aside class="spot-side" aria-label="출발 전 체크리스트">
+      <h3>출발 전 체크리스트 <small>지금 ${hmOf(now)} 기준</small></h3>
+      ${f.cx ? `<p>결항된 편이에요. 대체편·환불은 항공사 안내를 확인해 주세요.</p>` : `<ol class="check">${items}</ol>
+      <label class="travel-in">공항까지 이동 시간 <select data-travel>${[30, 45, 60, 75, 90, 120].map((m) => `<option value="${m}" ${m === travel ? "selected" : ""}>${m}분</option>`).join("")}</select></label>`}
+      <p class="fine">권장 도착 = 출발 2시간 30분 전 기준의 자체 계산이에요. 체크인 마감·탑승 시작은 일반적인 기준이며 항공사 안내가 우선이에요.</p>
+    </aside>
+  </article>`;
 }
 
 // ---------- congestion strip + linked card
@@ -377,7 +455,7 @@ function select(sel) { state.sel = sel; state.cardAirline = ""; markSel(); rende
 
 function renderCard() {
   const card = $("card");
-  if (!state.sel) { card.hidden = true; return; }
+  if (!state.sel) { card.hidden = true; renderSelbar(); aiSync(); return; }
   card.hidden = false;
   const { term, hall, h, col } = state.sel, d = day(), c = state.board.cong[d];
   const inSlot = state.board.flights.filter((f) => f.d === d && (col || termGroup(f.tm) === term) && Number(f.t.slice(0, 2)) === h);
@@ -397,6 +475,28 @@ function renderCard() {
   const sel = $("cardAirline");
   sel.innerHTML = `<option value="">전체 (${inSlot.length})</option>` + airlines.map((a) => `<option value="${esc(a)}">${esc(a)} (${inSlot.filter((f) => f.al === a).length})</option>`).join("");
   sel.value = state.cardAirline;
+  renderSelbar();
+  aiSync();
+}
+// Selected hour/hall summary above the heatmap (text + level label, not colour alone).
+function renderSelbar() {
+  const el = $("selbar"), s = state.sel, d = day(), c = state.board.cong[d];
+  if (!s || !c) { el.hidden = true; return; }
+  el.hidden = false;
+  const t = th(d), [ph, pv] = peak(d), t1 = c.T1?.tot[s.h] ?? 0, t2 = c.T2?.tot[s.h] ?? 0;
+  const tag = (lv) => `<span class="lvtag ${lv}"><i></i>${LV_TEXT[lv]}</span>`;
+  let pick;
+  if (s.col) {
+    let best = null;
+    for (const term of ["T1", "T2"]) for (const [hall, v] of Object.entries(c[term]?.halls || {})) if (v[s.h] > 0 && (!best || v[s.h] > best[2])) best = [term, hall, v[s.h]];
+    pick = best ? `<div><span>가장 붐비는 출국장 · ${hh(s.h)}시</span><b>${best[0]} ${best[1]}번 ${fmt(best[2])}명 ${tag(level(best[2], t))}</b></div>` : `<div><span>출국장</span><b>운영 출국장 없음</b></div>`;
+  } else {
+    const v = c[s.term]?.halls[s.hall]?.[s.h] ?? 0;
+    pick = `<div><span>선택한 출국장 · 예상 승객</span><b>${fmt(v)}명 ${tag(level(v, t))}</b></div>`;
+  }
+  el.innerHTML = `<div><span>선택</span><b>${hh(s.h)}시 · ${s.col ? "T1+T2 전체" : `${s.term} ${s.hall}번 출국장`}</b></div>${pick}
+    <div><span>같은 시간 터미널 전체</span><b>T1 ${fmt(t1)} · T2 ${fmt(t2)}명</b></div>
+    <div><span>하루 중 가장 붐비는 시간</span><b>${pv ? `${hh(ph)}시 · ${fmt(pv)}명` : "-"}</b><small>공항 승객예고 · 색 구간은 자체 기준</small></div>`;
 }
 function drawLink() {
   const svg = $("link"), view = $("hourview"), card = $("card"), box = $("stripBox");
@@ -411,6 +511,98 @@ function drawLink() {
   const x2 = b.left - v.left - 4, y2 = Math.min(Math.max(y1, b.top - v.top + 30), b.bottom - v.top - 30);
   svg.innerHTML = `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--primary)"/></marker></defs>` +
     `<circle cx="${x1}" cy="${y1}" r="3" fill="var(--primary)"/><line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="var(--primary)" stroke-width="1.75" marker-end="url(#ah)"/>`;
+}
+
+// ---------- AI analysis (screen aggregates only -> /api/analyze; the key never leaves the server)
+function aiPayload() {
+  const s = state.sel; if (!state.board || !s) return null;
+  const m = state.board.meta, d = day(), c = state.board.cong[d];
+  const fl = state.board.flights.filter((f) => f.d === d);
+  const inSlot = fl.filter((f) => (s.col || termGroup(f.tm) === s.term) && Number(f.t.slice(0, 2)) === s.h);
+  const count = (a) => ({ total: a.length, delayed: a.filter((f) => f.dly && !f.cx).length, cancelled: a.filter((f) => f.cx).length });
+  const terms = s.col ? ["T1", "T2"] : [s.term];
+  let pf = null;
+  if (c) {
+    const hourly = {}, byHall = {};
+    for (const t of terms) if (c[t]) {
+      hourly[t] = c[t].tot;
+      for (const [hall, v] of Object.entries(c[t].halls)) if (s.col || hall === s.hall || v[s.h] > 0) byHall[`${t}-${hall}`] = v[s.h] || 0;
+    }
+    const pkOf = (arr) => arr.reduce((b, v, i) => (v > b[1] ? [i, v] : b), [0, -1]);
+    const one = !s.col && c[s.term] ? pkOf(c[s.term].tot) : null;
+    const [ah, av] = peak(d), t = th(d);
+    pf = { hourly, selectedHourByHall: byHall, levelThresholds: { busyFrom: Math.round(t.mid), veryBusyFrom: Math.round(t.high) },
+      peak: one ? { terminal: s.term, hour: one[0], people: one[1] } : null, peakAll: av ? { hour: ah, people: av } : null };
+  }
+  const dest = new Map(); inSlot.forEach((f) => { const e = dest.get(f.dc) || { name: f.dn, n: 0 }; e.n++; dest.set(f.dc, e); });
+  const weather = [...dest.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0])).slice(0, 5).map(([code, e]) => {
+    const w = wx(code) || []; return { code, name: e.name, flights: e.n, tempC: w[1] ?? null, feelsC: w[2] ?? null, humidity: w[3] ?? null, windMs: w[4] ?? null };
+  });
+  const limits = [];
+  if (!c) limits.push("이 날짜는 출국장 혼잡 예고가 없음 (공항이 오늘·내일만 제공)");
+  else limits.push("혼잡 예고는 공항 승객예고 자료이며 실제 대기와 다를 수 있음");
+  limits.push("기상은 현재 관측값이며 예보가 아님");
+  if (d >= boardDays()[0]) limits.push("아직 출발 전인 편의 지연은 반영되지 않았을 수 있음");
+  const days = boardDays();
+  const fAt = state.pick ? state.extra[state.pick]?.meta.source.at : m.sources.flights?.at;
+  return {
+    view: { date: d, dayLabel: d === days[0] ? "오늘" : d === days[1] ? "내일" : dayLabel(d),
+      selection: s.col ? { type: "column", terminal: "T1+T2", hall: null, hour: s.h } : { type: "cell", terminal: s.term, hall: s.hall, hour: s.h } },
+    asOf: { flights: fAt || null, passenger: c ? m.sources.passenger?.at || null : null, weather: m.sources.weather?.at || null },
+    flights: { day: count(fl), selectedHour: { terminal: s.col ? "T1+T2" : s.term, hour: s.h, ...count(inSlot) } },
+    passengerForecast: pf, weather, knownLimits: limits,
+  };
+}
+// Same screen = same key (data timestamps excluded so a 5-minute refresh with unchanged numbers keeps the answer).
+const aiKeyOf = (p) => (p ? JSON.stringify({ ...p, asOf: null }) : null);
+function aiScopeText() {
+  const s = state.sel; if (!s) return "혼잡 띠에서 시간대나 출국장을 고르면 분석할 수 있어요.";
+  return `${dayLabel(day())} · ${hh(s.h)}시 · ${s.col ? "T1+T2 전체" : `${s.term} ${s.hall}번 출국장`} 기준`;
+}
+function aiSync() {
+  const key = aiKeyOf(aiPayload());
+  if (key !== state.ai.key) { state.ai.key = key; state.ai.result = null; state.ai.error = null; state.ai.loading = false; state.ai.seq++; }
+  renderAi();
+}
+function renderAi() {
+  const a = state.ai, body = $("aiBody"), btn = $("aiBtn");
+  $("aiScope").textContent = aiScopeText();
+  btn.disabled = a.loading || !state.sel; btn.classList.toggle("loading", a.loading);
+  $("aiBtnText").textContent = a.loading ? "분석 중…" : a.result ? "다시 분석" : "AI 분석";
+  if (a.loading) {
+    body.innerHTML = `<div class="ai-skel sum"><i></i><i></i></div>` + [1, 2, 3].map(() => `<div class="ai-skel"><i></i><i></i><i></i></div>`).join("") + `<p class="sr-only">AI가 화면 값을 분석하고 있어요. 최대 20초 걸려요.</p>`;
+  } else if (a.error) {
+    body.innerHTML = `<div class="ai-err" role="alert"><b>AI 분석을 보여드리지 못했어요</b>${esc(a.error)}</div>`;
+  } else if (a.result) {
+    const r = a.result.analysis, li = (xs) => `<ul>${xs.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>`;
+    body.innerHTML = `<div class="ai-cell sum"><h4><i>1</i>한 줄 요약</h4><p>${esc(r.summary)}</p></div>
+      <div class="ai-cell"><h4><i>2</i>눈에 띄는 점</h4>${li(r.highlights)}</div>
+      <div class="ai-cell"><h4><i>3</i>출장 팁</h4>${li(r.tips)}</div>
+      <div class="ai-cell lim" style="grid-column:1/-1"><h4><i>4</i>데이터 한계</h4>${li(r.limits)}</div>`;
+  } else {
+    body.innerHTML = `<p class="ai-empty">${state.sel ? "지금 화면에 보이는 집계값(선택 시간대·출국장, 편수, 지연·결항, 예상 승객, 목적지 기상)만 보내 요약해요. 항공편 목록은 보내지 않아요." : "혼잡 띠에서 시간대나 출국장을 먼저 골라 주세요."}</p>`;
+  }
+  const basis = a.result ? a.result.meta : null;
+  $("aiFoot").textContent = `AI 생성 · 참고용 · 공식 운항 정보는 항공사 안내 확인 · 기준일 ${day() || "-"}${basis?.asOf?.flights ? ` (운항 자료 ${stamp(basis.asOf.flights).slice(6)})` : ""}${basis ? ` · ${basis.model}${basis.cache === "hit" ? " · 10분 캐시" : ""}` : ""}`;
+}
+async function runAi() {
+  const a = state.ai; if (a.loading) return; // no double submit
+  const payload = aiPayload(); if (!payload) return;
+  const seq = ++a.seq; a.key = aiKeyOf(payload); a.loading = true; a.error = null; a.result = null; renderAi();
+  const ctrl = new AbortController(), timer = setTimeout(() => ctrl.abort(), 20000);
+  try {
+    const r = await fetch("/api/analyze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload), signal: ctrl.signal });
+    const body = await r.json().catch(() => ({}));
+    if (seq !== a.seq) return; // selection changed while waiting: drop the old answer
+    if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`);
+    a.result = body;
+  } catch (e) {
+    if (seq !== a.seq) return;
+    a.error = e.name === "AbortError" ? "20초 안에 답이 오지 않아 중단했어요. 잠시 후 다시 눌러 주세요." : navigator.onLine === false ? "인터넷 연결을 확인해 주세요." : e.message;
+  } finally {
+    clearTimeout(timer);
+    if (seq === a.seq) { a.loading = false; renderAi(); }
+  }
 }
 
 // ---------- band setter
@@ -452,14 +644,25 @@ function filtered() {
     if (f.d !== d) return false;
     if (state.term && f.tm !== state.term) return false;
     if (state.airline && f.al !== state.airline) return false;
-    if (state.status === "issue" && !(f.dly || f.cx)) return false;
-    if (state.status === "before" && (f.sg === "departed" || f.cx)) return false;
-    if (state.status === "boarding" && f.sg !== "boarding") return false;
-    if (state.status === "departed" && f.sg !== "departed") return false;
+    if (!statusMatch(f, state.status)) return false;
     if (q && !`${f.dn} ${f.dc} ${f.q} ${f.al}`.toLowerCase().includes(q)) return false;
     return true;
-  }).sort(issueFirst);
+  }).sort(SORTS[state.sort] || issueFirst);
 }
+function statusMatch(f, s) {
+  if (s === "issue") return f.dly || f.cx;
+  if (s === "before") return f.sg !== "departed" && !f.cx;
+  if (s === "boarding") return f.sg === "boarding";
+  if (s === "departed") return f.sg === "departed";
+  return true;
+}
+const byTime = (a, b) => (a.d + a.t).localeCompare(b.d + b.t) || a.id.localeCompare(b.id);
+const SORTS = {
+  issue: issueFirst,
+  time: byTime,
+  id: (a, b) => a.id.localeCompare(b.id) || byTime(a, b),
+  dest: (a, b) => a.dn.localeCompare(b.dn, "ko") || byTime(a, b),
+};
 function recCell(f) {
   const r = recommend(f);
   if (!r) return `<span class="fine">-</span>`;
@@ -471,10 +674,15 @@ function recCell(f) {
 function renderFlights() {
   const rows = filtered(), all = state.board.flights.filter((f) => f.d === day());
   const q = state.q.trim().toUpperCase();
-  $("flightCount").textContent = `${fmt(rows.length)}편 / 전체 ${fmt(all.length)}편 · 결항·지연 ${rows.filter((f) => f.cx || f.dly).length}편을 맨 위에`;
+  $("flightCount").textContent = `${dayLabel(day())} · ${fmt(rows.length)}편 / 전체 ${fmt(all.length)}편 · 행을 누르면 출발 플래너가 열려요`;
+  const sortTh = { time: "thTime", id: "thId", dest: "thDest" };
+  for (const id of ["thTime", "thId", "thDest"]) $(id).removeAttribute("aria-sort");
+  if (sortTh[state.sort]) $(sortTh[state.sort]).setAttribute("aria-sort", "ascending");
   const tb = $("tbody");
-  if (!rows.length) { tb.innerHTML = `<tr><td colspan="9" class="empty">조건에 맞는 출발편이 없어요. 검색어나 필터를 바꿔 보세요.</td></tr>`; $("moreBox").hidden = true; }
-  else {
+  if (!rows.length) {
+    const why = state.q ? `'${esc(state.q)}'에 맞는 출발편이 없어요. 편명·목적지·공항 코드·항공사로 다시 검색해 보세요.` : "조건에 맞는 출발편이 없어요. 필터를 바꿔 보세요.";
+    tb.innerHTML = `<tr><td colspan="9" class="empty">${why}</td></tr>`; $("moreBox").hidden = true;
+  } else {
     tb.innerHTML = rows.slice(0, state.limit).map((f) => {
       const cls = f.cx ? "cx" : f.dly ? "dl" : f.sg === "departed" ? "gone" : "";
       const changed = f.e && f.e !== f.t && !f.cx;
@@ -482,7 +690,7 @@ function renderFlights() {
       const viaCs = q && q.length >= 3 && f.cs.some((c) => c.startsWith(q)) && !f.id.startsWith(q) ? `<span class="hit">검색한 ${esc(f.cs.find((c) => c.startsWith(q)))} → 실제 운항편</span>` : "";
       const watched = watchMatch(f);
       const w = wx(f.dc);
-      return `<tr class="${cls}" data-key="${esc(fKey(f))}">
+      return `<tr class="${cls}" data-key="${esc(fKey(f))}" tabindex="0" aria-label="${esc(f.id)} ${esc(f.dn)} ${f.t} ${esc(statusText(f))}">
         <td><button class="star" type="button" data-star="${esc(f.id)}" aria-pressed="${watched}" aria-label="${esc(f.id)} 내 출장 편${watched ? "에서 빼기" : "에 담기"}">${watched ? "★" : "☆"}</button></td>
         <td class="t">${f.t}</td><td class="t ${changed ? "chg" : ""}">${changed ? esc(estLabel(f)) : ""}</td>
         <td><span class="fid">${esc(f.id)}</span><div class="al">${esc(f.al)}</div>${f.cs.length ? `<div class="cs">${esc(f.cs.join(" · "))}</div>` : ""}${viaCs}</td>
@@ -495,6 +703,22 @@ function renderFlights() {
     $("moreBox").hidden = left <= 0; if (left > 0) $("moreBtn").textContent = `${fmt(Math.min(60, left))}편 더 보기 (남은 ${fmt(left)}편)`;
   }
   $("clearAll").hidden = !(state.term || state.airline || state.status || state.q);
+  $("fSort").value = state.sort;
+  renderOps();
+}
+// Status-first summary above the dense table: chips (filter shortcuts) + flights that need attention.
+function renderOps() {
+  const d = day(), all = state.board.flights.filter((f) => f.d === d);
+  const chips = [["", "전체", "all"], ["issue", "지연 · 결항", "late"], ["before", "출발 전", "plain"], ["boarding", "탑승 관련", "board"], ["departed", "출발 완료", "ok"]];
+  $("statusChips").innerHTML = chips.map(([v, lab, ic]) => `<button class="chip" type="button" data-status="${v}" aria-pressed="${state.status === v}">${ICON[ic]}${lab} <b>${fmt(all.filter((f) => statusMatch(f, v)).length)}</b></button>`).join("");
+  const now = nowMs(), isToday = d === boardDays()[0];
+  const watch = all.filter((f) => (f.dly || f.cx) && f.sg !== "departed" && (!isToday || depMs(f) >= now - 30 * 60000)).sort((a, b) => depMs(a) - depMs(b));
+  const box = $("opsPreview");
+  if (!all.length) { box.innerHTML = ""; return; }
+  if (d < boardDays()[0]) { box.innerHTML = `<p class="fine" style="grid-column:1/-1">지난 날짜라 모든 편이 출발했거나 결항됐어요. 지연·결항 편은 위 '지연 · 결항' 버튼으로 모아 볼 수 있어요.</p>`; return; }
+  if (!watch.length) { box.innerHTML = `<div class="ops-ok" style="grid-column:1/-1">${ICON.ok}출발 전인 편 중 지연 · 결항으로 표시된 편이 없어요. (${esc(dayLabel(d))} · 운항 자료 ${esc(stamp(flightsAt()).slice(6))} 기준)</div>`; return; }
+  box.innerHTML = `<p class="fine" style="grid-column:1/-1">주의가 필요한 출발 전 편 · 출발 시각순 ${watch.length > 8 ? `(8편 / 전체 ${watch.length}편)` : `(${watch.length}편)`}</p>` +
+    watch.slice(0, 8).map((f) => `<button class="wl ${f.cx ? "cx" : ""}" type="button" data-open="${esc(fKey(f))}"><span class="t">${f.cx ? f.t : esc(estLabel(f))}<small>${f.cx ? "결항" : f.dl > 0 ? `+${f.dl}분` : "지연"}</small></span><span class="i">${esc(f.id)} · ${esc(f.dn)}</span><span class="d">${esc(f.al)} · ${esc(TERM_SHORT[f.tm] || f.tm)} · 예정 ${f.t}</span>${pill(f)}</button>`).join("");
 }
 function renderFilters() {
   const seg = $("termSeg"); seg.textContent = "";
@@ -514,20 +738,55 @@ function renderTrends() {
   if (!t) return;
   if (!t.available) {
     $("trendCap").textContent = "지난 3일 운항 자료를 받지 못했어요.";
-    box.innerHTML = `<div class="panel tr-sum"><b>지연 경향을 보여줄 수 없어요</b><span class="fine">${t.reason === "NO_KEY" ? "서버에 인증키가 설정되면 지난 3일 출발편으로 항공사·목적지별 지연률을 계산해요. 샘플 자료에는 지난 날짜가 없어요." : "공공데이터 API 연결이 원활하지 않아요. 잠시 후 다시 시도해 주세요."}</span></div>`;
+    box.innerHTML = `<div class="panel tr-sum" style="grid-column:1/-1"><b>지연 분석을 보여줄 수 없어요</b><span class="fine">${t.reason === "NO_KEY" ? "서버에 인증키가 설정되면 지난 3일 출발편으로 시간대·항공사·목적지별 지연을 집계해요. 샘플 자료에는 지난 날짜가 없어요." : "공공데이터 API 연결이 원활하지 않아요. 30분마다 다시 시도해요."}</span></div>`;
     return;
   }
-  $("trendCap").textContent = `${dayLabel(t.days[0])} ~ ${dayLabel(t.days[t.days.length - 1])} 출발편 기준 · 5편 이상 운항한 곳만 · 지연(15분 이상)과 결항을 합친 비율`;
+  const days = t.days;
+  $("trendCap").textContent = `${dayLabel(days[0])} ~ ${dayLabel(days[days.length - 1])} 인천 출발편 · 출발 예정 시각 1시간 단위 집계 · 지난 자료이며 예측이 아니에요`;
   for (const [v, lab] of [["airlines", "항공사별"], ["destinations", "목적지별"]]) {
     const b = document.createElement("button"); b.type = "button"; b.textContent = lab; b.setAttribute("aria-pressed", String(state.trendBy === v));
     b.onclick = () => { state.trendBy = v; renderTrends(); }; seg.append(b);
   }
-  const list = t[state.trendBy].slice(0, 10);
+  if (!state.trendDay || (state.trendDay !== "all" && !days.includes(state.trendDay))) state.trendDay = "all";
+  const byDay = t.byDay || [];
+  const pickDays = state.trendDay === "all" ? byDay : byDay.filter((x) => x.day === state.trendDay);
+  const hours = Array.from({ length: 24 }, (_, h) => pickDays.reduce((a, x) => { const c = x.hours[h] || {}; a.total += c.total || 0; a.delayed += c.delayed || 0; a.cancelled += c.cancelled || 0; return a; }, { total: 0, delayed: 0, cancelled: 0 }));
+  const sum = hours.reduce((a, c) => ({ total: a.total + c.total, delayed: a.delayed + c.delayed, cancelled: a.cancelled + c.cancelled }), { total: 0, delayed: 0, cancelled: 0 });
+  const maxT = Math.max(1, ...hours.map((c) => c.total));
+  let top = -1, topBad = 0;
+  hours.forEach((c, h) => { const bad = c.delayed + c.cancelled; if (c.total >= 5 && bad > topBad) { topBad = bad; top = h; } });
+  const scope = state.trendDay === "all" ? `지난 3일` : dayLabel(state.trendDay);
+  const daySeg = `<div class="seg" role="group" aria-label="집계 날짜">${[["all", "3일 합계"], ...days.map((x) => [x, dayLabel(x)])].map(([v, lab]) => `<button type="button" data-tday="${v}" aria-pressed="${state.trendDay === v}">${esc(lab)}</button>`).join("")}</div>`;
+  const rate = sum.total ? Math.round(((sum.delayed + sum.cancelled) / sum.total) * 100) : 0;
+  const bars = hours.map((c, h) => {
+    const th = Math.round((c.total / maxT) * 100), dl = c.total ? (c.delayed / c.total) * 100 : 0, cx = c.total ? (c.cancelled / c.total) * 100 : 0;
+    const lab = `${hh(h)}시 출발 예정 ${c.total}편 중 지연 ${c.delayed}편, 결항 ${c.cancelled}편`;
+    return `<button class="hbar${h === top ? " top" : ""}" type="button" aria-label="${lab}" data-tip="${hh(h)}~${hh((h + 1) % 24)}시 출발 예정 <b>${c.total}편</b><br>지연 ${c.delayed}편 · 결항 ${c.cancelled}편"><span class="tot" style="height:${Math.max(c.total ? 2 : 0, th)}%"><span class="bad c" style="height:${cx}%"></span><span class="bad" style="height:${dl}%"></span></span></button>`;
+  }).join("");
+  const insight = top >= 0
+    ? `${scope} 출발 예정 시각 기준으로 지연·결항이 가장 많았던 시간대는 <b>${hh(top)}시</b>예요 — ${hours[top].total}편 중 ${topBad}편. 지난 자료 집계이며 앞으로의 지연을 예측하지 않아요.`
+    : `${scope}에는 5편 이상 출발한 시간대 중 지연·결항 편이 없어요.`;
+  const list = t[state.trendBy].slice(0, 8);
   const maxRate = Math.max(0.01, ...list.map((g) => g.rate));
-  box.innerHTML = `<div class="panel tr-sum"><span class="fine">지난 3일 전체</span><span class="big-n">${Math.round(t.overall.rate * 100)}%</span><span>${fmt(t.overall.total)}편 중 지연 ${fmt(t.overall.delayed)}편 · 결항 ${fmt(t.overall.cancelled)}편</span><span class="fine">자료 ${esc(stamp(t.at))} · 6시간마다 새로 받아요</span></div>
-    <div class="panel tr-list">${list.map((g) => `<div class="tr-row"><span class="tr-name" title="${esc(g.label)}">${esc(g.label)}${state.trendBy === "destinations" ? `<span class="code">${esc(g.key)}</span>` : ""}</span>
-      <span class="tr-bar"><i class="${g.rate >= 0.3 ? "warn" : ""}" style="width:${Math.round((g.rate / maxRate) * 100)}%"></i></span>
-      <span class="tr-v"><b>${Math.round(g.rate * 100)}%</b> · ${g.n}편 · 평균 ${g.avgDelay}분</span></div>`).join("") || '<p class="empty">5편 이상 운항한 곳이 없어요.</p>'}</div>`;
+  box.innerHTML = `<div class="panel tr-chart">
+      <div class="tr-chart-h"><div class="tr-nums">
+        <div><span>${esc(scope)} 출발편</span><b>${fmt(sum.total)}<small>편</small></b></div>
+        <div><span>지연</span><b style="color:var(--late)">${fmt(sum.delayed)}<small>편</small></b></div>
+        <div><span>결항</span><b style="color:var(--cx)">${fmt(sum.cancelled)}<small>편</small></b></div>
+        <div><span>지연·결항 비율 <span class="calc">자체 계산</span></span><b>${rate}<small>%</small></b></div></div>${daySeg}</div>
+      <div><div class="hbars" role="group" aria-label="${esc(scope)} 출발 시간대별 편수와 지연·결항">${bars}</div>
+        <div class="hax" aria-hidden="true">${hours.map((_, h) => `<span>${hh(h)}</span>`).join("")}</div></div>
+      <div class="chart-legend"><span><i style="background:var(--surface-3)"></i>출발 예정 편수</span><span><i style="background:var(--late)"></i>지연</span><span><i style="background:var(--cx)"></i>결항</span><span><i style="background:transparent;box-shadow:0 0 0 2px var(--ink)"></i>지연·결항 최다 시간대 (5편 이상)</span></div>
+      <p class="insight">${ICON.bulb}<span>${insight}</span></p>
+      <p class="fine">자료 ${esc(stamp(t.at))} · 6시간마다 새로 받아요 · 지연 = 15분 이상 늦거나 '지연' 표시</p>
+    </div>
+    <div class="panel tr-side"><div class="tr-side-h"><h3>${state.trendBy === "airlines" ? "항공사별" : "목적지별"} 지연·결항 비율</h3><span class="fine">3일 · 5편 이상</span></div>
+      ${list.map((g) => `<div class="tr-row"><span class="tr-name" title="${esc(g.label)}">${esc(g.label)}${state.trendBy === "destinations" ? `<span class="code">${esc(g.key)}</span>` : ""}</span>
+        <span class="tr-bar" aria-hidden="true"><i class="${g.rate >= 0.3 ? "warn" : ""}" style="width:${Math.round((g.rate / maxRate) * 100)}%"></i></span>
+        <span class="tr-v"><b>${Math.round(g.rate * 100)}%</b> · ${g.n}편 · 평균 ${g.avgDelay}분</span></div>`).join("") || '<p class="empty">5편 이상 운항한 곳이 없어요.</p>'}
+      <p class="fine">평균 = 결항을 뺀 편의 평균 늦어진 시간 (자체 계산)</p></div>`;
+  box.querySelectorAll("[data-tday]").forEach((b) => { b.onclick = () => { state.trendDay = b.dataset.tday; renderTrends(); }; });
+  box.querySelectorAll(".hbar").forEach((el) => { el.onpointerenter = (e) => showTip(e, el.dataset.tip); el.onpointermove = moveTip; el.onpointerleave = hideTip; el.onfocus = () => { const r = el.getBoundingClientRect(); showTip({ clientX: r.right, clientY: r.top }, el.dataset.tip); }; el.onblur = hideTip; });
 }
 const trendOf = (kind, key) => state.trends?.available ? state.trends[kind].find((g) => g.key === key) : null;
 
@@ -536,12 +795,16 @@ function renderWeather() {
   const byDest = new Map();
   for (const f of filtered()) { const e = byDest.get(f.dc) || { n: 0, name: f.dn }; e.n++; byDest.set(f.dc, e); }
   const list = [...byDest.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
+  const at = state.board.meta.sources.weather?.at, src = state.board.meta.sources.weather?.status;
+  $("wxSub").textContent = `현재 관측값 · 예보 아님 · 날씨 자료 ${at ? stamp(at).slice(6) : "-"} 수신 (KST)${src === "sample" ? " · 샘플 자료" : ""} · 운항 현황 조건에 맞는 목적지, 편 수가 많은 순`;
   $("wx").innerHTML = list.slice(0, state.wxLimit).map(([code, e]) => {
     const w = wx(code);
-    if (!w || w[1] == null) return `<div class="wxcard na"><div class="nm"><span>${esc(e.name)}</span><span class="code">${esc(code)}</span></div><div class="tp">관측값 없음</div><div class="dt">오늘 이 목적지 운항편이 없거나 값이 비어 있어요 · ${e.n}편</div></div>`;
-    return `<div class="wxcard"><div class="nm"><span>${esc(w[0] || e.name)}</span><span class="code">${esc(code)}</span></div><div class="tp ${w[1] <= 5 ? "cold" : ""}">${Math.round(w[1])}°</div>
-      <div class="dt">${w[2] == null ? "" : `체감 ${Math.round(w[2])}° · `}습도 ${w[3] ?? "-"}% · 바람 ${w[4] ?? "-"}m/s</div><div class="dt">이 목적지 ${e.n}편 · 현재 관측</div></div>`;
-  }).join("") || `<p class="empty">조건에 맞는 목적지가 없어요.</p>`;
+    const foot = `<div class="dt"><span>${esc(dayLabel(day()))} 출발 ${e.n}편</span><span>관측 자료 ${at ? esc(stamp(at).slice(6)) : "-"}</span></div>`;
+    if (!w || w[1] == null) return `<div class="wxcard na"><div class="nm"><span>${esc(e.name)}</span><span class="code">${esc(code)}</span></div><div class="tp">관측값 없음</div><p class="fine">공항 자료에 이 목적지 값이 비어 있어요.</p>${foot}</div>`;
+    return `<div class="wxcard"><div class="nm"><span>${esc(w[0] || e.name)}</span><span class="code">${esc(code)}</span></div>
+      <div class="tp">${Math.round(w[1])}°<small>현재 관측</small></div>
+      <dl><dt>체감</dt><dd>${w[2] == null ? "-" : Math.round(w[2]) + "°"}</dd><dt>습도</dt><dd>${w[3] ?? "-"}%</dd><dt>바람</dt><dd>${w[4] ?? "-"}m/s</dd></dl>${foot}</div>`;
+  }).join("") || `<p class="empty">조건에 맞는 목적지가 없어요. 운항 현황 필터를 바꿔 보세요.</p>`;
   const left = list.length - state.wxLimit;
   $("wxMoreBox").hidden = left <= 0; if (left > 0) $("wxMore").textContent = `목적지 ${left}곳 더 보기`;
 }
@@ -642,6 +905,7 @@ function renderAll(animate) {
 }
 
 $("refreshBtn").onclick = () => loadBoard({ manual: true });
+$("aiBtn").onclick = runAi;
 $("calBtn").onclick = () => { const c = $("calInput"); try { c.showPicker(); } catch (e) { c.focus(); c.click(); } };
 $("calInput").onchange = (e) => pickDate(e.target.value);
 $("thMid").oninput = () => onTh("mid"); $("thHigh").oninput = () => onTh("high");
@@ -649,6 +913,17 @@ $("thReset").onclick = () => { state.th = null; store.set("icn.th", null); rende
 $("cardAirline").onchange = (e) => { state.cardAirline = e.target.value; renderCard(); drawLink(); };
 $("fAirline").onchange = (e) => { state.airline = e.target.value; state.limit = 60; renderFlights(); renderWeather(); };
 $("fStatus").onchange = (e) => { state.status = e.target.value; state.limit = 60; renderFlights(); renderWeather(); };
+$("fSort").onchange = (e) => { state.sort = e.target.value; renderFlights(); };
+$("statusChips").addEventListener("click", (e) => { const b = e.target.closest("[data-status]"); if (!b) return; state.status = b.dataset.status; state.limit = 60; $("fStatus").value = state.status; renderFlights(); renderWeather(); });
+$("opsPreview").addEventListener("click", (e) => { const b = e.target.closest("[data-open]"); if (b) openDrawer(b.dataset.open); });
+$("tbody").addEventListener("keydown", (e) => { if (e.key !== "Enter" && e.key !== " ") return; const tr = e.target.closest("tr[data-key]"); if (tr && e.target === tr) { e.preventDefault(); openDrawer(tr.dataset.key); } });
+$("menuBtn").onclick = () => { const open = !$("gnav").classList.contains("open"); $("gnav").classList.toggle("open", open); $("menuBtn").setAttribute("aria-expanded", String(open)); $("menuBtn").setAttribute("aria-label", open ? "메뉴 닫기" : "메뉴 열기"); };
+$("gnav").addEventListener("click", (e) => { if (e.target.closest("a")) { $("gnav").classList.remove("open"); $("menuBtn").setAttribute("aria-expanded", "false"); } });
+if (window.IntersectionObserver) {
+  const links = [...document.querySelectorAll("#gnav a")];
+  const io = new IntersectionObserver((ents) => { for (const en of ents) if (en.isIntersecting) links.forEach((a) => a.setAttribute("aria-current", String(a.getAttribute("href") === "#" + en.target.id))); }, { rootMargin: "-45% 0px -50% 0px" });
+  links.forEach((a) => { const t = document.querySelector(a.getAttribute("href")); if (t) io.observe(t); });
+}
 let qT; $("fSearch").oninput = (e) => { clearTimeout(qT); qT = setTimeout(() => { state.q = e.target.value; state.limit = 60; renderFlights(); renderWeather(); }, 140); };
 $("clearAll").onclick = () => { Object.assign(state, { term: "", airline: "", status: "", q: "", limit: 60 }); renderFilters(); renderFlights(); renderWeather(); };
 $("moreBtn").onclick = () => { state.limit += 60; renderFlights(); };
@@ -676,8 +951,12 @@ $("miniBody").addEventListener("click", (e) => { const tr = e.target.closest("tr
 $("mineList").addEventListener("click", (e) => {
   const un = e.target.closest("[data-unwatch]");
   if (un) { e.stopPropagation(); const f = state.board.flights.find((x) => x.q.split(" ").includes(un.dataset.unwatch)); (f ? f.q.split(" ") : [un.dataset.unwatch]).forEach((a) => toggleWatch(a, false)); renderMine(); renderFlights(); return; }
+  const op = e.target.closest("[data-open]"); if (op) { openDrawer(op.dataset.open); return; }
+  if (e.target.closest("[data-focus-add]")) { scrollTo({ top: 0, behavior: REDUCED ? "auto" : "smooth" }); $("addInput").focus({ preventScroll: true }); return; }
+  if (e.target.closest("select")) return;
   const card = e.target.closest(".mf[data-key]"); if (card) openDrawer(card.dataset.key);
 });
+$("mineList").addEventListener("change", (e) => { if (e.target.matches("[data-travel]")) { state.travel = Number(e.target.value); store.set("icn.travel", state.travel); renderMine(); } });
 $("mineList").addEventListener("keydown", (e) => { if (e.key === "Enter") { const card = e.target.closest(".mf[data-key]"); if (card) openDrawer(card.dataset.key); } });
 $("addForm").addEventListener("submit", (e) => {
   e.preventDefault();
